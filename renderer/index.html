@@ -1,0 +1,100 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8" />
+  <meta http-equiv="Content-Security-Policy"
+        content="default-src 'self'; script-src 'self'; style-src 'self' 'unsafe-inline'" />
+  <title>Claude Usage</title>
+  <link rel="stylesheet" href="styles.css" />
+</head>
+<body>
+<div id="app">
+
+  <div id="titlebar">
+    <div id="title-left">
+      <span id="title-grip">⠿</span>
+      <span id="title-label">Claude Usage</span>
+    </div>
+    <div id="title-actions">
+      <button class="icon-btn" id="btn-settings" title="Settings">⚙</button>
+      <button class="icon-btn" id="btn-minimize" title="Minimize">−</button>
+    </div>
+  </div>
+
+  <div id="body">
+
+    <!-- Session (base) -->
+    <div class="usage-row">
+      <div class="row-header">
+        <span class="row-label">Session</span>
+        <span class="row-right">
+          <span class="row-value" id="session-value">—</span><span class="row-limit" id="session-limit"></span>
+        </span>
+      </div>
+      <div class="progress-track">
+        <div class="progress-fill no-limit" id="session-bar" style="width:0%"></div>
+      </div>
+    </div>
+
+    <!-- Extra usage (hidden until > 0) -->
+    <div class="usage-row extra-row" id="row-extra" style="display:none">
+      <div class="row-header">
+        <span class="row-label extra-label">+Extra</span>
+        <span class="row-right">
+          <span class="row-value extra-value" id="extra-value">—</span>
+        </span>
+      </div>
+      <div class="progress-track">
+        <div class="progress-fill extra-fill" id="extra-bar" style="width:0%"></div>
+      </div>
+    </div>
+
+    <!-- Weekly -->
+    <div class="usage-row">
+      <div class="row-header">
+        <span class="row-label">Weekly</span>
+        <span class="row-right">
+          <span class="row-value" id="weekly-value">—</span><span class="row-limit" id="weekly-limit"></span>
+        </span>
+      </div>
+      <div class="progress-track">
+        <div class="progress-fill no-limit" id="weekly-bar" style="width:0%"></div>
+      </div>
+    </div>
+
+  </div>
+
+  <div id="no-data">No Claude Code<br>data found</div>
+
+  <div id="footer">
+    <span id="reset-timer"></span>
+    <span id="last-sync"></span>
+  </div>
+
+  <!-- Settings panel -->
+  <div id="settings-panel">
+    <div id="settings-title">Settings</div>
+    <div class="setting-row">
+      <span class="setting-label">Plan</span>
+      <div class="plan-buttons">
+        <button class="plan-btn" data-plan="pro"    data-session="44000"   data-weekly="220000">Pro</button>
+        <button class="plan-btn" data-plan="max5"   data-session="88000"   data-weekly="440000">Max5</button>
+        <button class="plan-btn" data-plan="max20"  data-session="220000"  data-weekly="1100000">Max20</button>
+        <button class="plan-btn" data-plan="custom" data-session=""        data-weekly="">Custom</button>
+      </div>
+    </div>
+    <div class="setting-row" id="custom-row" style="display:none">
+      <span class="setting-label">Session&nbsp;limit</span>
+      <input class="custom-input" id="custom-session" type="number" placeholder="88000" min="1000" />
+    </div>
+    <div class="settings-actions">
+      <button class="btn-sm" id="btn-no-limit">No limit</button>
+      <button class="btn-sm" id="btn-settings-cancel">Cancel</button>
+      <button class="btn-sm primary" id="btn-settings-save">Save</button>
+    </div>
+  </div>
+
+</div>
+<script src="app.js"></script>
+</body>
+</html>
