@@ -49,18 +49,8 @@
       </div>
     </div>
 
-    <!-- Weekly -->
-    <div class="usage-row">
-      <div class="row-header">
-        <span class="row-label">Weekly</span>
-        <span class="row-right">
-          <span class="row-value" id="weekly-value">—</span><span class="row-limit" id="weekly-limit"></span>
-        </span>
-      </div>
-      <div class="progress-track">
-        <div class="progress-fill no-limit" id="weekly-bar" style="width:0%"></div>
-      </div>
-    </div>
+    <!-- Weekly rows — populated dynamically per model -->
+    <div id="weekly-rows"></div>
 
   </div>
 
@@ -77,15 +67,31 @@
     <div class="setting-row">
       <span class="setting-label">Plan</span>
       <div class="plan-buttons">
-        <button class="plan-btn" data-plan="pro"    data-session="44000"   data-weekly="220000">Pro</button>
-        <button class="plan-btn" data-plan="max5"   data-session="88000"   data-weekly="440000">Max5</button>
-        <button class="plan-btn" data-plan="max20"  data-session="220000"  data-weekly="1100000">Max20</button>
-        <button class="plan-btn" data-plan="custom" data-session=""        data-weekly="">Custom</button>
+        <button class="plan-btn" data-plan="pro"
+          data-session="320000"
+          data-weekly-sonnet="436000"
+          data-weekly-haiku="25000"
+          data-weekly-opus="0">Pro</button>
+        <button class="plan-btn" data-plan="max5"
+          data-session="1600000"
+          data-weekly-sonnet="2180000"
+          data-weekly-haiku="125000"
+          data-weekly-opus="0">Max5</button>
+        <button class="plan-btn" data-plan="max20"
+          data-session="6400000"
+          data-weekly-sonnet="8720000"
+          data-weekly-haiku="500000"
+          data-weekly-opus="0">Max20</button>
+        <button class="plan-btn" data-plan="custom"
+          data-session=""
+          data-weekly-sonnet=""
+          data-weekly-haiku=""
+          data-weekly-opus="">Custom</button>
       </div>
     </div>
     <div class="setting-row" id="custom-row" style="display:none">
       <span class="setting-label">Session&nbsp;limit</span>
-      <input class="custom-input" id="custom-session" type="number" placeholder="88000" min="1000" />
+      <input class="custom-input" id="custom-session" type="number" placeholder="330000" min="1000" />
     </div>
     <div class="settings-actions">
       <button class="btn-sm" id="btn-no-limit">No limit</button>

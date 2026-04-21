@@ -4,8 +4,10 @@ const fs   = require('fs');
 const os   = require('os');
 
 const { getUsage, CLAUDE_PROJECTS_DIR } = require('./src/usageParser');
+const { fetchUsage } = require('./src/claudeApi');
 
 const CONFIG_PATH      = path.join(os.homedir(), '.claude-overlay-config.json');
+const CACHE_PATH       = path.join(os.homedir(), '.claude-usage-cache.json');
 const POLL_INTERVAL_MS = 10_000;
 const IS_MAC           = process.platform === 'darwin';
 
@@ -46,7 +48,7 @@ function createWindow() {
 
   win = new BrowserWindow({
     width: 300,
-    height: 195,
+    height: 270,
     x, y,
     alwaysOnTop: true,
     frame: false,
@@ -91,9 +93,14 @@ function createTray() {
 
 async function pushUsage() {
   if (!win || win.isDestroyed()) return;
-  const data = await getUsage();
+  // Try live API first; fall back to local JSONL counting
+  let data = await fetchUsage();
+  if (!data) data = await getUsage();
   if (!data) { win.webContents.send('no-data'); return; }
   win.webContents.send('usage-update', data);
+  if (data.source === 'api') {
+    try { fs.writeFileSync(CACHE_PATH, JSON.stringify(data)); } catch {}
+  }
 }
 
 function startPolling() {

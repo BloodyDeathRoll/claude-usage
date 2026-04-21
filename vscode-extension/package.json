@@ -1,0 +1,47 @@
+{
+  "name": "claude-usage",
+  "displayName": "Claude Usage",
+  "description": "Real-time Claude Code session and weekly token usage in the status bar. Reads live data from claude.ai (Firefox/Chrome) with local JSONL fallback.",
+  "version": "0.1.0",
+  "publisher": "shahar",
+  "license": "MIT",
+  "engines": { "vscode": "^1.85.0" },
+  "categories": ["Other"],
+  "keywords": ["claude", "anthropic", "usage", "tokens", "ai"],
+  "activationEvents": ["onStartupFinished"],
+  "main": "./extension.js",
+  "contributes": {
+    "commands": [
+      {
+        "command": "claudeUsage.refresh",
+        "title": "Claude Usage: Refresh Now"
+      }
+    ],
+    "configuration": {
+      "title": "Claude Usage",
+      "properties": {
+        "claudeUsage.sessionLimitTokens": {
+          "type": ["number", "null"],
+          "default": null,
+          "description": "Session token limit for your plan (used for local fallback %). Pro=320000, Max5=1600000, Max20=6400000. Leave null to show raw counts."
+        },
+        "claudeUsage.weeklyLimitTokens": {
+          "type": ["number", "null"],
+          "default": null,
+          "description": "Weekly token limit for your plan (used for local fallback %)."
+        },
+        "claudeUsage.weeklyModelLimits": {
+          "type": ["object", "null"],
+          "default": null,
+          "description": "Per-model weekly limits, e.g. { \"sonnet\": 436000, \"haiku\": 25000 }. Used for local fallback only."
+        }
+      }
+    }
+  },
+  "dependencies": {
+    "glob": "^10.4.0"
+  },
+  "devDependencies": {
+    "@vscode/vsce": "^3.0.0"
+  }
+}
