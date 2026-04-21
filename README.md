@@ -23,7 +23,7 @@ They share the same data. When the Electron overlay is running, the VS Code exte
 
 #### Option A — Install from `.vsix` (recommended)
 
-1. Download `claude-usage-0.1.0.vsix` from the [Releases](../../releases) page.
+1. Download `claude-usage-0.1.0.vsix` from the [latest release](https://github.com/BloodyDeathRoll/claude-usage/releases/latest).
 
 2. Install it:
 
@@ -54,6 +54,8 @@ npm install
 npx vsce package           # produces claude-usage-0.1.0.vsix
 code --install-extension claude-usage-0.1.0.vsix
 ```
+
+> **Not on the VS Code Marketplace yet.** The extension is distributed via `.vsix` only. It will not appear in the Extensions search on machines where it has not been manually installed. To install on another PC, download the `.vsix` from the [latest release](https://github.com/BloodyDeathRoll/claude-usage/releases/latest) and follow Option A above.
 
 ---
 
