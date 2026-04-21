@@ -1,0 +1,260 @@
+#!/usr/bin/env node
+'use strict';
+// Claude Usage CLI — works anywhere Node.js is installed (no npm install needed).
+// Usage:
+//   node claude-usage          pretty terminal output
+//   node claude-usage --short  single line (for shell prompts / tmux)
+//   node claude-usage --json   raw JSON
+
+const { execSync } = require('child_process');
+const http2        = require('http2');
+const fs           = require('fs');
+const os           = require('os');
+const path         = require('path');
+
+// ── Cookie reader (Python subprocess, same logic as the VS Code extension) ────
+
+const PYTHON = String.raw`
+import sqlite3, shutil, os, glob, json, tempfile, platform, sys
+
+def firefox_db():
+    s = platform.system()
+    if s == 'Linux':
+        base = os.path.expanduser("~/.config/mozilla/firefox")
+    elif s == 'Darwin':
+        base = os.path.expanduser("~/Library/Application Support/Firefox")
+    elif s == 'Windows':
+        base = os.path.join(os.environ.get('APPDATA',''), 'Mozilla','Firefox')
+    else:
+        return None
+    for p in glob.glob(os.path.join(base,"*.default-release")) + glob.glob(os.path.join(base,"*.default")):
+        db = os.path.join(p,"cookies.sqlite")
+        if os.path.exists(db): return db
+    return None
+
+def chrome_db():
+    s = platform.system()
+    if s == 'Linux':
+        paths = [
+            "~/.config/google-chrome/Default/Cookies",
+            "~/.config/chromium/Default/Cookies",
+            "~/.config/BraveSoftware/Brave-Browser/Default/Cookies",
+            "~/.config/microsoft-edge/Default/Cookies",
+            "~/.config/vivaldi/Default/Cookies",
+            "~/.config/opera/Default/Cookies",
+        ]
+    elif s == 'Darwin':
+        paths = [
+            "~/Library/Application Support/Google/Chrome/Default/Cookies",
+            "~/Library/Application Support/BraveSoftware/Brave-Browser/Default/Cookies",
+            "~/Library/Application Support/Microsoft Edge/Default/Cookies",
+            "~/Library/Application Support/Vivaldi/Default/Cookies",
+        ]
+    elif s == 'Windows':
+        local = os.environ.get('LOCALAPPDATA','')
+        paths = [
+            os.path.join(local,'Google','Chrome','User Data','Default','Cookies'),
+            os.path.join(local,'BraveSoftware','Brave-Browser','User Data','Default','Cookies'),
+            os.path.join(local,'Microsoft','Edge','User Data','Default','Cookies'),
+            os.path.join(local,'Vivaldi','User Data','Default','Cookies'),
+        ]
+    else:
+        return None
+    for p in paths:
+        db = os.path.expanduser(p)
+        if os.path.exists(db): return db
+    return None
+
+def read_sqlite(db, query):
+    tmp = tempfile.mktemp(suffix=".sqlite")
+    shutil.copy2(db, tmp)
+    try:
+        conn = sqlite3.connect(tmp)
+        rows = conn.execute(query).fetchall()
+        conn.close()
+        return rows
+    finally:
+        try: os.unlink(tmp)
+        except: pass
+
+def decrypt_chrome(enc):
+    if not enc: return ""
+    if enc[:3] not in (b'v10',b'v11'): return enc.decode('utf-8','ignore')
+    try:
+        from Crypto.Cipher import AES
+        import hashlib
+        key = hashlib.pbkdf2_hmac('sha1',b'peanuts',b'saltysalt',1,dklen=16)
+        raw = AES.new(key, AES.MODE_CBC, IV=b' '*16).decrypt(enc[3:])
+        return raw[:-raw[-1]].decode('utf-8','ignore')
+    except:
+        return ""
+
+cookies = {}
+ff = firefox_db()
+if ff:
+    try:
+        rows = read_sqlite(ff, "SELECT name,value FROM moz_cookies WHERE host LIKE '%claude.ai%'")
+        cookies = dict(rows)
+    except: pass
+
+if not cookies.get('sessionKey'):
+    ch = chrome_db()
+    if ch:
+        try:
+            rows = read_sqlite(ch, "SELECT name,value,encrypted_value FROM cookies WHERE host_key LIKE '%claude.ai%'")
+            ch_cookies = {}
+            for name,val,enc in rows:
+                ch_cookies[name] = val if val else decrypt_chrome(enc)
+            if ch_cookies.get('sessionKey'):
+                cookies = ch_cookies
+        except: pass
+
+print(json.dumps(cookies))
+`;
+
+function readCookies() {
+  try {
+    const tmp = path.join(os.tmpdir(), 'claude_usage_cli_cookies.py');
+    fs.writeFileSync(tmp, PYTHON);
+    const out = execSync(`python3 "${tmp}"`, { timeout: 6000, stdio: ['pipe','pipe','pipe'] });
+    const data = JSON.parse(out.toString().trim());
+    return data.sessionKey ? data : null;
+  } catch {
+    return null;
+  }
+}
+
+// ── HTTP/2 API fetch ──────────────────────────────────────────────────────────
+
+function fetchUsage(cookies) {
+  const { sessionKey, cf_clearance, lastActiveOrg: orgId } = cookies;
+  const cookieStr = ['sessionKey=' + sessionKey, cf_clearance ? 'cf_clearance=' + cf_clearance : ''].filter(Boolean).join('; ');
+
+  return new Promise(resolve => {
+    let settled = false;
+    const done = v => { if (!settled) { settled = true; resolve(v); } };
+
+    let client;
+    try { client = http2.connect('https://claude.ai'); }
+    catch { return done(null); }
+
+    const cleanup = () => { try { client.close(); } catch {} };
+    client.on('error', () => { cleanup(); done(null); });
+    const timer = setTimeout(() => { cleanup(); done(null); }, 10_000);
+
+    const req = client.request({
+      ':method':       'GET',
+      ':path':         `/api/organizations/${orgId}/usage`,
+      ':scheme':       'https',
+      ':authority':    'claude.ai',
+      'cookie':        cookieStr,
+      'user-agent':    'Mozilla/5.0 (X11; Linux x86_64; rv:124.0) Gecko/20100101 Firefox/124.0',
+      'accept':        'application/json',
+      'referer':       'https://claude.ai/settings/limits',
+      'accept-language': 'en-US,en;q=0.5',
+      'sec-fetch-dest':  'empty',
+      'sec-fetch-mode':  'cors',
+      'sec-fetch-site':  'same-origin',
+    });
+
+    let status, body = '';
+    req.on('response', h => { status = parseInt(h[':status'], 10); });
+    req.on('data',     c => { body += c; });
+    req.on('end', () => {
+      clearTimeout(timer);
+      cleanup();
+      if (status !== 200 || body.startsWith('<')) return done(null);
+      try { done(JSON.parse(body)); } catch { done(null); }
+    });
+    req.on('error', () => { cleanup(); done(null); });
+    req.end();
+  });
+}
+
+// ── Formatters ────────────────────────────────────────────────────────────────
+
+const RESET = '\x1b[0m', BOLD = '\x1b[1m', DIM = '\x1b[2m';
+const RED = '\x1b[31m', YELLOW = '\x1b[33m', GREEN = '\x1b[32m', CYAN = '\x1b[36m';
+
+function color(pct) {
+  if (pct >= 85) return RED;
+  if (pct >= 60) return YELLOW;
+  return GREEN;
+}
+
+function bar(pct, width = 20) {
+  const filled = Math.round(Math.min(100, pct ?? 0) / 100 * width);
+  return color(pct ?? 0) + '█'.repeat(filled) + DIM + '░'.repeat(width - filled) + RESET;
+}
+
+function fmtPct(pct) {
+  if (pct == null) return DIM + '—' + RESET;
+  const c = color(pct);
+  return c + BOLD + Math.round(pct) + '%' + RESET;
+}
+
+function fmtCountdown(isoDate) {
+  if (!isoDate) return '';
+  const ms = new Date(isoDate).getTime() - Date.now();
+  if (ms <= 0) return ' (resets soon)';
+  const h = Math.floor(ms / 3_600_000);
+  const m = Math.floor((ms % 3_600_000) / 60_000);
+  if (h > 0) return ` (resets in ${h}h ${String(m).padStart(2,'0')}m)`;
+  return ` (resets in ${m}m)`;
+}
+
+function printPretty(raw) {
+  const session = raw.five_hour;
+  const weekly  = raw.seven_day;
+  const extra   = raw.extra_usage;
+
+  console.log('\n' + BOLD + CYAN + '  Claude Usage' + RESET);
+  console.log(DIM + '  ─────────────────────────────────' + RESET);
+
+  if (session) {
+    const pct = session.utilization ?? 0;
+    console.log(`  Session  ${bar(pct)}  ${fmtPct(pct)}${fmtCountdown(session.resets_at)}`);
+  }
+  if (weekly) {
+    const pct = weekly.utilization ?? 0;
+    console.log(`  Weekly   ${bar(pct)}  ${fmtPct(pct)}${fmtCountdown(weekly.resets_at)}`);
+  }
+  if (extra && (extra.is_enabled || (extra.utilization ?? 0) > 0)) {
+    const pct     = extra.utilization ?? 0;
+    const credits = extra.used_credits != null ? ` ($${Number(extra.used_credits).toFixed(2)})` : '';
+    console.log(`  Extra    ${bar(pct)}  ${fmtPct(pct)}${credits}`);
+  }
+
+  console.log(DIM + '\n  Source: claude.ai API  •  ' + new Date().toLocaleTimeString() + RESET + '\n');
+}
+
+function printShort(raw) {
+  const s = Math.round(raw.five_hour?.utilization ?? 0);
+  const w = Math.round(raw.seven_day?.utilization ?? 0);
+  const e = raw.extra_usage?.is_enabled ? `  Extra: ${Math.round(raw.extra_usage?.utilization ?? 0)}%` : '';
+  process.stdout.write(`Session: ${s}%  Weekly: ${w}%${e}\n`);
+}
+
+// ── Main ──────────────────────────────────────────────────────────────────────
+
+(async () => {
+  const args   = process.argv.slice(2);
+  const isJson  = args.includes('--json');
+  const isShort = args.includes('--short') || args.includes('-s');
+
+  const cookies = readCookies();
+  if (!cookies) {
+    process.stderr.write('Error: no browser session found.\nOpen claude.ai in your browser (Firefox, Chrome, Brave, Edge, Vivaldi) and make sure you are logged in, then retry.\n');
+    process.exit(1);
+  }
+
+  const raw = await fetchUsage(cookies);
+  if (!raw) {
+    process.stderr.write('Error: could not reach claude.ai API. Check your internet connection.\n');
+    process.exit(1);
+  }
+
+  if (isJson)  { console.log(JSON.stringify(raw, null, 2)); return; }
+  if (isShort) { printShort(raw); return; }
+  printPretty(raw);
+})();
