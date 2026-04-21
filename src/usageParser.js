@@ -16,46 +16,48 @@ function modelFamily(model) {
   return 'other';
 }
 
-function parseFile(filePath) {
-  let sessionStart = null;
+// cutoff: only count entries whose timestamp >= cutoff (ms). null = count all.
+function parseFile(filePath, cutoff = null) {
   let raw;
   try { raw = fs.readFileSync(filePath, 'utf8'); }
-  catch { return { input: 0, output: 0, cacheRead: 0, cacheCreate: 0, sessionStart: null, byModel: {} }; }
+  catch { return { input: 0, output: 0, cacheRead: 0, cacheCreate: 0, byModel: {}, oldest: null }; }
 
-  // Claude Code writes each assistant message twice: once during streaming
-  // (stop_reason: null, partial tokens) and once when complete (final tokens).
-  // Deduplicate by message.id, keeping the last entry (highest token count).
-  const byMsgId = new Map(); // message.id -> { inp, out, cr, cc, family }
-  const noIdEntries = [];    // entries without a message.id (summed directly)
+  const byMsgId   = new Map();
+  const noIdEntries = [];
+  let oldest = null;
 
   for (const line of raw.split('\n')) {
     if (!line.trim()) continue;
     try {
       const obj = JSON.parse(line);
 
+      let entryTime = null;
       const ts = obj?.timestamp;
       if (ts) {
         const d = new Date(ts);
-        if (!isNaN(d) && (!sessionStart || d < sessionStart)) sessionStart = d;
+        if (!isNaN(d)) entryTime = d;
       }
+
+      if (cutoff !== null && (!entryTime || entryTime.getTime() < cutoff)) continue;
+
+      if (entryTime && (!oldest || entryTime < oldest)) oldest = entryTime;
 
       const u = obj?.message?.usage ?? obj?.usage;
       if (!u) continue;
 
-      const inp = u.input_tokens                ?? 0;
-      const out = u.output_tokens               ?? 0;
-      const cr  = u.cache_read_input_tokens     ?? 0;
-      const cc  = u.cache_creation_input_tokens ?? 0;
+      const inp    = u.input_tokens                ?? 0;
+      const out    = u.output_tokens               ?? 0;
+      const cr     = u.cache_read_input_tokens     ?? 0;
+      const cc     = u.cache_creation_input_tokens ?? 0;
       const family = modelFamily(obj?.message?.model ?? obj?.model ?? '');
       const msgId  = obj?.message?.id;
 
       if (msgId) {
-        // Always overwrite — later entry has equal-or-higher token counts
         byMsgId.set(msgId, { inp, out, cr, cc, family });
       } else {
         noIdEntries.push({ inp, out, cr, cc, family });
       }
-    } catch { }
+    } catch {}
   }
 
   let input = 0, output = 0, cacheRead = 0, cacheCreate = 0;
@@ -76,7 +78,7 @@ function parseFile(filePath) {
   for (const entry of byMsgId.values()) accumulate(entry);
   for (const entry of noIdEntries)      accumulate(entry);
 
-  return { input, output, cacheRead, cacheCreate, sessionStart, byModel };
+  return { input, output, cacheRead, cacheCreate, byModel, oldest };
 }
 
 async function getUsage() {
@@ -95,45 +97,21 @@ async function getUsage() {
     catch { return null; }
   }).filter(Boolean);
 
-  // ── Current session ────────────────────────────────────────────────────────
-  const sessionFiles = withMtime.filter(x => x.mtime >= sessionCutoff);
-  let session = { input: 0, output: 0, cacheRead: 0, cacheCreate: 0, total: 0, billable: 0 };
-  let sessionStart = null;
-
-  if (sessionFiles.length) {
-    for (const { f } of sessionFiles) {
-      const u = parseFile(f);
-      session.input       += u.input;
-      session.output      += u.output;
-      session.cacheRead   += u.cacheRead;
-      session.cacheCreate += u.cacheCreate;
-      if (u.sessionStart && (!sessionStart || u.sessionStart < sessionStart)) {
-        sessionStart = u.sessionStart;
-      }
-    }
-    session.total    = session.input + session.output + session.cacheRead + session.cacheCreate;
-    session.billable = session.input + session.output;
-  }
-
-  // Reset = 5h after the oldest request in the session window.
-  let resetAt = null;
-  if (sessionFiles.length) {
-    const oldestMtime = Math.min(...sessionFiles.map(x => x.mtime));
-    const anchor = sessionStart ?? new Date(oldestMtime);
-    resetAt = new Date(anchor.getTime() + SESSION_WINDOW_MS);
-  }
-
-  // ── Weekly ─────────────────────────────────────────────────────────────────
+  // Pre-filter: skip files not touched in 7 days (they can't contain recent entries)
   const weeklyFiles = withMtime.filter(x => x.mtime >= weeklyCutoff);
-  let weekly = { input: 0, output: 0, cacheRead: 0, cacheCreate: 0, total: 0, billable: 0, byModel: {} };
 
-  for (const { f } of weeklyFiles) {
-    const u = parseFile(f);
-    weekly.input       += u.input;
-    weekly.output      += u.output;
-    weekly.cacheRead   += u.cacheRead;
-    weekly.cacheCreate += u.cacheCreate;
-    for (const [family, counts] of Object.entries(u.byModel)) {
+  let session = { input: 0, output: 0, cacheRead: 0, cacheCreate: 0, total: 0, billable: 0 };
+  let weekly  = { input: 0, output: 0, cacheRead: 0, cacheCreate: 0, total: 0, billable: 0, byModel: {} };
+  let sessionOldest = null;
+
+  for (const { f, mtime } of weeklyFiles) {
+    // Weekly: count only entries with ts in the last 7 days
+    const wu = parseFile(f, weeklyCutoff);
+    weekly.input       += wu.input;
+    weekly.output      += wu.output;
+    weekly.cacheRead   += wu.cacheRead;
+    weekly.cacheCreate += wu.cacheCreate;
+    for (const [family, counts] of Object.entries(wu.byModel)) {
       if (!weekly.byModel[family]) {
         weekly.byModel[family] = { input: 0, output: 0, cacheRead: 0, cacheCreate: 0 };
       }
@@ -142,14 +120,29 @@ async function getUsage() {
       weekly.byModel[family].cacheRead   += counts.cacheRead;
       weekly.byModel[family].cacheCreate += counts.cacheCreate;
     }
+
+    // Session: only parse files that could have recent entries (mtime in last 5h)
+    if (mtime >= sessionCutoff) {
+      const su = parseFile(f, sessionCutoff);
+      session.input       += su.input;
+      session.output      += su.output;
+      session.cacheRead   += su.cacheRead;
+      session.cacheCreate += su.cacheCreate;
+      if (su.oldest && (!sessionOldest || su.oldest < sessionOldest)) sessionOldest = su.oldest;
+    }
   }
 
-  weekly.total    = weekly.input + weekly.output + weekly.cacheRead + weekly.cacheCreate;
-  weekly.billable = weekly.input + weekly.output;
+  session.total    = session.input + session.output + session.cacheRead + session.cacheCreate;
+  session.billable = session.input + session.output;
+  weekly.total     = weekly.input + weekly.output + weekly.cacheRead + weekly.cacheCreate;
+  weekly.billable  = weekly.input + weekly.output;
   for (const m of Object.values(weekly.byModel)) {
     m.billable = m.input + m.output;
     m.total    = m.input + m.output + m.cacheRead + m.cacheCreate;
   }
+
+  // resetAt = oldest entry in the session window + 5h
+  const resetAt = sessionOldest ? new Date(sessionOldest.getTime() + SESSION_WINDOW_MS) : null;
 
   return { session, weekly, resetAt, lastUpdated: new Date() };
 }
