@@ -35,12 +35,28 @@ def chrome_db():
         paths = [
             "~/.config/google-chrome/Default/Cookies",
             "~/.config/chromium/Default/Cookies",
+            "~/.config/BraveSoftware/Brave-Browser/Default/Cookies",
+            "~/.config/microsoft-edge/Default/Cookies",
+            "~/.config/vivaldi/Default/Cookies",
+            "~/.config/opera/Default/Cookies",
+            "~/.config/google-chrome-beta/Default/Cookies",
+            "~/.config/google-chrome-unstable/Default/Cookies",
         ]
     elif s == 'Darwin':
-        paths = ["~/Library/Application Support/Google/Chrome/Default/Cookies"]
+        paths = [
+            "~/Library/Application Support/Google/Chrome/Default/Cookies",
+            "~/Library/Application Support/BraveSoftware/Brave-Browser/Default/Cookies",
+            "~/Library/Application Support/Microsoft Edge/Default/Cookies",
+            "~/Library/Application Support/Vivaldi/Default/Cookies",
+        ]
     elif s == 'Windows':
         local = os.environ.get('LOCALAPPDATA','')
-        paths = [os.path.join(local,'Google','Chrome','User Data','Default','Cookies')]
+        paths = [
+            os.path.join(local,'Google','Chrome','User Data','Default','Cookies'),
+            os.path.join(local,'BraveSoftware','Brave-Browser','User Data','Default','Cookies'),
+            os.path.join(local,'Microsoft','Edge','User Data','Default','Cookies'),
+            os.path.join(local,'Vivaldi','User Data','Default','Cookies'),
+        ]
     else:
         return None
     for p in paths:

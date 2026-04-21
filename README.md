@@ -240,10 +240,19 @@ Percentages are calculated against the plan limits you configure. Without config
 
 ## Troubleshooting
 
+**Numbers don't match claude.ai (showing 0% or wrong %)**
+
+The extension needs a browser session to read exact values. For each machine you install it on:
+1. Make sure Python 3 is installed (`python3 --version` in a terminal)
+2. Open claude.ai in your browser on **that machine** and make sure you're logged in
+3. Click the status bar item to force a refresh
+
+Supported browsers (checked automatically): Firefox, Chrome, Chromium, Brave, Edge, Vivaldi, Opera.
+
 **Status bar shows `—` or raw token counts instead of percentages**
 
 The extension fell back to local JSONL and no plan limits are configured. Either:
-- Start the Electron overlay (it will write the cache file with exact API values), or
+- Open claude.ai in your browser and log in (see above), or
 - Set `claudeUsage.sessionLimitTokens` in VS Code settings to match your plan
 
 **"Python 3 is required" warning**
@@ -255,14 +264,7 @@ Install Python 3:
 
 **Cloudflare authentication prompt**
 
-The extension shows "open claude.ai in your browser to refresh authentication" when it receives 3 consecutive 403 responses. Open claude.ai in Firefox or Chrome, log in if needed, then click the status bar item to refresh.
-
-**Numbers don't match claude.ai**
-
-The live API path (`cache → browser cookies`) gives exact values. If you're seeing different numbers, the fallback JSONL path is being used. Check:
-1. Is the Electron overlay running? Check for `~/.claude-usage-cache.json` modified in the last 2 minutes.
-2. Is Python 3 installed and in your PATH?
-3. Are you logged in to claude.ai in Firefox or Chrome?
+Open claude.ai in your browser on this machine, log in if needed, then click the status bar item to refresh.
 
 ---
 
