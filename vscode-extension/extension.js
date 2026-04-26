@@ -7,10 +7,19 @@ const { fetchUsage }  = require('./src/claudeApi');
 const { getUsage }    = require('./src/usageParser');
 const { hasPython }   = require('./src/browserCookies');
 
-const OVERLAY_DIR      = path.join(os.homedir(), 'Projects', 'claude-usage');
-const OVERLAY_ELECTRON = path.join(OVERLAY_DIR, 'node_modules', '.bin', 'electron');
+function getOverlayDir() {
+  const cfg = vscode.workspace.getConfiguration('claudeUsage').get('overlayPath');
+  if (cfg) return cfg;
+  for (const candidate of ['claude-usage', 'usage']) {
+    const p = path.join(os.homedir(), 'Projects', candidate);
+    if (fs.existsSync(path.join(p, 'main.js'))) return p;
+  }
+  return path.join(os.homedir(), 'Projects', 'claude-usage');
+}
 
 function openOverlay() {
+  const OVERLAY_DIR      = getOverlayDir();
+  const OVERLAY_ELECTRON = path.join(OVERLAY_DIR, 'node_modules', '.bin', 'electron');
   if (!fs.existsSync(OVERLAY_ELECTRON)) {
     vscode.window.showWarningMessage(`Claude Usage overlay not found at ${OVERLAY_DIR}.`);
     return;
