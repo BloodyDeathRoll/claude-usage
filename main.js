@@ -48,12 +48,13 @@ function createWindow() {
 
   win = new BrowserWindow({
     width: 300,
-    height: 420,
+    height: 100,
+    useContentSize: true,
     x, y,
     alwaysOnTop: true,
     frame: false,
-    transparent: true,
-    backgroundColor: '#00000000',
+    transparent: false,
+    backgroundColor: '#0f0f0f',
     resizable: false,
     skipTaskbar: true,
     show: false,
@@ -127,6 +128,12 @@ ipcMain.on('drag-end', () => {
 });
 
 ipcMain.on('minimize', () => win?.hide());
+
+ipcMain.on('resize-to-content', (_, height) => {
+  if (!win || win.isDestroyed()) return;
+  const h = Math.max(60, Math.min(900, Math.ceil(height)));
+  win.setContentSize(300, h);
+});
 
 ipcMain.on('save-config', (_, cfg) => {
   saveConfig(cfg);

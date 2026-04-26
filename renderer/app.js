@@ -376,3 +376,21 @@ window.claudeUsage.getConfig().then(cfg => {
     config = cfg;
   }
 });
+
+// Auto-resize the Electron window to match content.
+const sendResize = (() => {
+  let last = 0;
+  let pending = null;
+  return () => {
+    if (pending) cancelAnimationFrame(pending);
+    pending = requestAnimationFrame(() => {
+      const h = document.getElementById('app').getBoundingClientRect().height;
+      if (Math.abs(h - last) >= 1) {
+        last = h;
+        window.claudeUsage.resize(h);
+      }
+    });
+  };
+})();
+new ResizeObserver(sendResize).observe(document.getElementById('app'));
+window.addEventListener('load', sendResize);

@@ -7,18 +7,38 @@ const { fetchUsage }  = require('./src/claudeApi');
 const { getUsage }    = require('./src/usageParser');
 const { hasPython }   = require('./src/browserCookies');
 
-const OVERLAY_DIR      = path.join(os.homedir(), 'Projects', 'usage');
+const OVERLAY_DIR      = path.join(os.homedir(), 'Projects', 'claude-usage');
 const OVERLAY_ELECTRON = path.join(OVERLAY_DIR, 'node_modules', '.bin', 'electron');
 
 function openOverlay() {
   if (!fs.existsSync(OVERLAY_ELECTRON)) {
-    vscode.window.showWarningMessage('Claude Usage overlay not found at ~/Projects/usage.');
+    vscode.window.showWarningMessage(`Claude Usage overlay not found at ${OVERLAY_DIR}.`);
     return;
   }
+  const childEnv = { ...process.env };
+  delete childEnv.ELECTRON_RUN_AS_NODE;
+  delete childEnv.ELECTRON_NO_ATTACH_CONSOLE;
   const child = spawn(OVERLAY_ELECTRON, [OVERLAY_DIR], {
     detached: true,
-    stdio: 'ignore',
+    stdio: ['ignore', 'pipe', 'pipe'],
     cwd: OVERLAY_DIR,
+    env: childEnv,
+  });
+  const logPath = path.join(os.tmpdir(), 'claude-usage-overlay.log');
+  let stderr = '';
+  child.stderr.on('data', d => { stderr += d.toString(); });
+  child.stdout.on('data', d => { stderr += d.toString(); });
+  child.on('error', err => {
+    fs.writeFileSync(logPath, `spawn error: ${err.stack || err.message}\n`);
+    vscode.window.showErrorMessage(`Claude Usage: failed to spawn Electron — ${err.message} (log: ${logPath})`);
+  });
+  child.on('exit', (code, signal) => {
+    if (code !== 0 && code !== null) {
+      try { fs.writeFileSync(logPath, stderr || '<no output>'); } catch {}
+      vscode.window.showErrorMessage(
+        `Claude Usage: Electron exited (code=${code}, signal=${signal}). Log: ${logPath}`
+      );
+    }
   });
   child.unref();
 }

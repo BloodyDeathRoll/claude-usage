@@ -8,4 +8,5 @@ contextBridge.exposeInMainWorld('claudeUsage', {
   minimize:       ()    => ipcRenderer.send('minimize'),
   saveConfig:     (cfg) => ipcRenderer.send('save-config', cfg),
   getConfig:      ()    => ipcRenderer.invoke('get-config'),
+  resize:         (h)   => ipcRenderer.send('resize-to-content', h),
 });
