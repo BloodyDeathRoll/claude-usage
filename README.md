@@ -2,6 +2,8 @@
 
 Real-time Claude Code token usage displayed in your VS Code status bar and/or as a floating desktop overlay. Shows the **exact same percentages** as the claude.ai Plan Usage Limits page — session usage, weekly usage, and extra credits — updated every 15 seconds.
 
+> **VS Code extension is now pure Node** — Python is no longer required. Cookie reading uses [`sql.js`](https://www.npmjs.com/package/sql.js) (a WASM build of SQLite) bundled with the extension.
+
 ---
 
 ## Components
@@ -86,11 +88,9 @@ The extension tries three sources in order, stopping at the first success:
 
 1. **Cache file** (`~/.claude-usage-cache.json`) — written by the Electron overlay every 10 seconds. Exact API values, no browser interaction needed. Used if the file is less than 2 minutes old.
 
-2. **Live API via browser cookies** — reads your Firefox or Chrome session cookie and calls the claude.ai internal API directly. Requires Python 3 (used to read the browser's SQLite cookie database). This gives the same exact percentages as the claude.ai settings page.
+2. **Live API via browser cookies** — reads your browser's `sessionKey` cookie and calls the claude.ai internal API directly. Pure Node (uses bundled `sql.js`); no Python or native modules required. Supports Firefox, Chrome, Chromium, Brave, Edge, Vivaldi, and (Linux only) Opera. This gives the same exact percentages as the claude.ai settings page.
 
 3. **Local JSONL fallback** — parses `~/.claude/projects/**/*.jsonl` (Claude Code's own log files) and calculates token counts locally. Percentages are estimated based on your configured plan limits.
-
-> **Why Python 3?** Browser cookies are stored in an SQLite database that Node.js cannot read natively without a native module. The extension runs a small embedded Python script to extract your session cookie securely from disk — no data leaves your machine.
 
 ---
 
@@ -99,11 +99,23 @@ The extension tries three sources in order, stopping at the first success:
 | Requirement | Notes |
 |-------------|-------|
 | VS Code 1.85+ | |
-| Python 3 | For live API access via browser cookies. Already installed on most Linux/macOS systems. [Download for Windows](https://www.python.org/downloads/). |
-| Firefox or Chrome | Must be logged in to claude.ai |
-| Claude Code | The local JSONL fallback reads Claude Code's session logs |
+| A supported browser logged into claude.ai | Firefox, Chrome, Chromium, Brave, Edge, Vivaldi, or (Linux) Opera. Without this the extension still works, but falls back to local JSONL counting. |
+| Claude Code | Used by the local JSONL fallback to read session logs |
 
-Python 3 is optional — without it, the extension falls back to local JSONL counting. A warning is shown once if Python is missing and you click the status bar item.
+#### Runtime dependencies (bundled in the `.vsix`)
+
+| Dependency | Why |
+|---|---|
+| [`sql.js`](https://www.npmjs.com/package/sql.js) ^1.10.3 | WASM-compiled SQLite — reads each browser's encrypted cookie database without any native module |
+
+No Python, no native build step, nothing to install separately. Platform-specific decryption uses tools that are already part of the OS:
+
+| Platform | Decryption uses |
+|---|---|
+| Linux (Chromium-based) | Built-in `crypto` (AES-128-CBC with the well-known `peanuts` key) |
+| macOS (Chromium-based) | `security find-generic-password` (already installed) to fetch the per-browser Keychain key |
+| Windows (Chromium-based) | `powershell.exe` (already installed) to call DPAPI `Unprotect` for the master key |
+| Firefox (any OS) | Direct read — Firefox cookies are unencrypted |
 
 ---
 
@@ -233,7 +245,7 @@ Percentages are calculated against the plan limits you configure. Without config
 ## Privacy
 
 - No data is sent anywhere. All network requests go only to `claude.ai` using your own browser session.
-- Cookie access is read-only and local. The Python script reads your browser's on-disk SQLite database; nothing is stored or transmitted.
+- Cookie access is read-only and local. The extension copies the browser's cookie database to a tempfile, reads it via in-process `sql.js`, then deletes the tempfile. Nothing is stored or transmitted.
 - The cache file `~/.claude-usage-cache.json` contains only usage percentages and token counts — no cookies, no personal data.
 
 ---
@@ -242,29 +254,32 @@ Percentages are calculated against the plan limits you configure. Without config
 
 **Numbers don't match claude.ai (showing 0% or wrong %)**
 
-The extension needs a browser session to read exact values. For each machine you install it on:
-1. Make sure Python 3 is installed (`python3 --version` in a terminal)
-2. Open claude.ai in your browser on **that machine** and make sure you're logged in
-3. Click the status bar item to force a refresh
+The extension needs a browser session to read exact values. On each machine:
+1. Open claude.ai in any supported browser and make sure you're logged in.
+2. Visit `claude.ai/settings/usage` once so the cookies are written to disk.
+3. Click the status bar item (or run **Claude Usage: Refresh Now**) to force a refresh.
 
-Supported browsers (checked automatically): Firefox, Chrome, Chromium, Brave, Edge, Vivaldi, Opera.
+Supported browsers (checked automatically): Firefox, Chrome, Chromium, Brave, Edge, Vivaldi, Opera (Linux only).
+
+**Tooltip says `(local estimate)` instead of `(live)`**
+
+The cookie read failed. Common causes:
+- Not logged in to claude.ai in any of the supported browsers above.
+- Using a non-default Chromium profile (only the `Default` profile is searched).
+- Using a fork the extension doesn't know about (e.g. LibreWolf, Arc on Windows).
+- **Linux Chrome with kwallet/gnome-keyring**: cookies are encrypted with a key the extension can't read. Either start Chrome with `--password-store=basic` and **log in to claude.ai again** (existing cookies won't decrypt — a fresh login is required), or use Firefox.
+- **macOS first run**: a Keychain dialog appears asking permission to read the browser's Safe Storage password. Click **Always Allow** to suppress future prompts.
+- **Chrome ≥127 v20 app-bound encryption**: the `sessionKey` cookie typically still uses v10/v11, so this is rare. If it ever breaks, fall back to Firefox (plaintext on every OS).
 
 **Status bar shows `—` or raw token counts instead of percentages**
 
 The extension fell back to local JSONL and no plan limits are configured. Either:
 - Open claude.ai in your browser and log in (see above), or
-- Set `claudeUsage.sessionLimitTokens` in VS Code settings to match your plan
-
-**"Python 3 is required" warning**
-
-Install Python 3:
-- Linux: `sudo apt install python3` (Debian/Ubuntu) or `sudo dnf install python3` (Fedora)
-- macOS: `brew install python3` or download from python.org
-- Windows: Download from [python.org](https://www.python.org/downloads/) and check "Add to PATH" during installation
+- Set `claudeUsage.sessionLimitTokens` in VS Code settings to match your plan.
 
 **Cloudflare authentication prompt**
 
-Open claude.ai in your browser on this machine, log in if needed, then click the status bar item to refresh.
+Open claude.ai in your browser on this machine, complete the human-check, then click the status bar item to refresh. The `cf_clearance` cookie has to be fresh.
 
 ---
 

@@ -114,6 +114,7 @@ function chromiumLocations() {
     const local = process.env.LOCALAPPDATA || '';
     return [
       { browser: 'Chrome',         userDataDir: path.join(local, 'Google',        'Chrome',        'User Data') },
+      { browser: 'Chromium',       userDataDir: path.join(local, 'Chromium',                       'User Data') },
       { browser: 'Brave',          userDataDir: path.join(local, 'BraveSoftware', 'Brave-Browser','User Data') },
       { browser: 'Microsoft Edge', userDataDir: path.join(local, 'Microsoft',     'Edge',          'User Data') },
       { browser: 'Vivaldi',        userDataDir: path.join(local, 'Vivaldi',                        'User Data') },
@@ -149,12 +150,15 @@ const MAC_KEYCHAIN_ACCOUNTS = {
 function deriveMacKey(browser) {
   const account = MAC_KEYCHAIN_ACCOUNTS[browser];
   if (!account) return null;
+  // Match by account AND service name. The service is "<Browser> Safe Storage".
+  // Without -s we'd match any Keychain entry that happens to share the account.
+  const service = `${account} Safe Storage`;
   let pw;
   try {
-    pw = execSync(`security find-generic-password -wa ${JSON.stringify(account)}`, {
-      timeout: 5000,
-      stdio: ['ignore', 'pipe', 'pipe'],
-    }).toString().trim();
+    pw = execSync(
+      `security find-generic-password -w -a ${JSON.stringify(account)} -s ${JSON.stringify(service)}`,
+      { timeout: 5000, stdio: ['ignore', 'pipe', 'pipe'] }
+    ).toString().trim();
   } catch { return null; }
   if (!pw) return null;
   return crypto.pbkdf2Sync(pw, 'saltysalt', 1003, 16, 'sha1');
@@ -203,9 +207,10 @@ function getWindowsMasterKey(userDataDir) {
 function decryptCbc(enc, key) {
   if (!enc || enc.length < 3) return '';
   const prefix = enc.slice(0, 3).toString('utf8');
-  if (prefix !== 'v10' && prefix !== 'v11') {
-    try { return enc.toString('utf8'); } catch { return ''; }
-  }
+  // Only v10/v11 are CBC. v20 (Chrome ≥127 app-bound encryption) and any
+  // unknown prefix → skip; returning the raw bytes would masquerade as a
+  // valid cookie and produce a 403 from the API.
+  if (prefix !== 'v10' && prefix !== 'v11') return '';
   const ct = enc.slice(3);
   const iv = Buffer.alloc(16, 0x20); // 16 spaces
   try {
@@ -221,9 +226,7 @@ function decryptCbc(enc, key) {
 function decryptGcm(enc, key) {
   if (!enc || enc.length < 3 + 12 + 16) return '';
   const prefix = enc.slice(0, 3).toString('utf8');
-  if (prefix !== 'v10' && prefix !== 'v11') {
-    try { return enc.toString('utf8'); } catch { return ''; }
-  }
+  if (prefix !== 'v10' && prefix !== 'v11') return '';
   const nonce = enc.slice(3, 15);
   const ct    = enc.slice(15, enc.length - 16);
   const tag   = enc.slice(enc.length - 16);
@@ -236,10 +239,14 @@ function decryptGcm(enc, key) {
 
 // ── Per-browser readers ──────────────────────────────────────────────────────
 async function readFirefoxCookies() {
+  // Firefox `moz_cookies.expiry` is UNIX seconds; 0 means session cookie.
+  const nowSec = Math.floor(Date.now() / 1000);
   for (const db of findFirefoxDbs()) {
     const rows = await querySqlite(
       db,
-      "SELECT name, value FROM moz_cookies WHERE host LIKE '%claude.ai%'"
+      `SELECT name, value FROM moz_cookies
+       WHERE host LIKE '%claude.ai%'
+         AND (expiry = 0 OR expiry > ${nowSec})`
     );
     if (!rows.length) continue;
     const cookies = {};
@@ -251,6 +258,9 @@ async function readFirefoxCookies() {
 
 async function readChromiumCookies() {
   const platform = os.platform();
+  // Chromium `cookies.expires_utc` is microseconds since 1601-01-01 UTC.
+  // Convert UNIX millis → Chrome epoch micros: (ms + 11644473600000) * 1000.
+  const nowChromeUs = (Date.now() + 11644473600000) * 1000;
   for (const { browser, userDataDir } of chromiumLocations()) {
     if (!fs.existsSync(userDataDir)) continue;
     const dbPath = findChromiumCookiesDb(userDataDir);
@@ -264,7 +274,9 @@ async function readChromiumCookies() {
 
     const rows = await querySqlite(
       dbPath,
-      "SELECT name, value, encrypted_value FROM cookies WHERE host_key LIKE '%claude.ai%'"
+      `SELECT name, value, encrypted_value FROM cookies
+       WHERE host_key LIKE '%claude.ai%'
+         AND (expires_utc = 0 OR expires_utc > ${nowChromeUs})`
     );
     if (!rows.length) continue;
 

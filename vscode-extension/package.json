@@ -5,6 +5,14 @@
   "version": "0.1.0",
   "publisher": "shahar",
   "license": "MIT",
+  "repository": {
+    "type": "git",
+    "url": "https://github.com/BloodyDeathRoll/claude-usage.git"
+  },
+  "homepage": "https://github.com/BloodyDeathRoll/claude-usage#readme",
+  "bugs": {
+    "url": "https://github.com/BloodyDeathRoll/claude-usage/issues"
+  },
   "engines": { "vscode": "^1.85.0" },
   "categories": ["Other"],
   "keywords": ["claude", "anthropic", "usage", "tokens", "ai"],

@@ -35,28 +35,43 @@ The Python dependency is gone. `browserCookies.js` is now pure Node. No
 | Opera | ✔ (Linux only) | — | — |
 
 Implementation notes:
-- SQLite reads go through `sql.js` (WASM, ~1 MB). DB is copied to a temp file
-  before opening so a running browser doesn't block the read.
-- macOS: shells out to `security` to pull the Chrome Safe Storage password
-  from Keychain. First run prompts the user once.
+- SQLite reads go through `sql.js` (WASM). The DB is copied to a tempfile,
+  read into a buffer, and the tempfile is deleted before sql.js opens it — the
+  copy avoids contention with a running browser.
+- Cookie queries filter by expiry (`expiry > now` for Firefox, `expires_utc >
+  now` for Chromium) so we never pick up a stale `sessionKey`.
+- macOS: shells out to `security find-generic-password -a <Browser> -s
+  "<Browser> Safe Storage"` to pull the Chromium key from Keychain. On first
+  run a Keychain dialog appears; clicking **Always Allow** suppresses future
+  prompts (without it, the dialog reappears every refresh).
 - Windows: shells out to PowerShell with `-EncodedCommand` to call
   `[System.Security.Cryptography.ProtectedData]::Unprotect` for DPAPI
   unwrapping. No native binary needed.
 - Firefox detection: also fixed a typo from the old Python script that pointed
   Linux Firefox at `~/.config/mozilla/firefox` (lowercase, wrong) instead of
   `~/.mozilla/firefox`.
+- Decrypt helpers (`decryptCbc` / `decryptGcm`) return `''` when the version
+  prefix isn't `v10` / `v11`. Earlier draft returned the raw encrypted bytes
+  decoded as UTF-8 — that masqueraded as a valid cookie and produced a
+  confusing 403 from the API on Chrome ≥127 (`v20` prefix). Skipping cleanly
+  lets us fall through to the next browser instead.
 
 ### Known limitations
 
 - **Chrome ≥ 127 "v20" app-bound encryption** isn't handled. claude.ai's
   `sessionKey` cookie typically still uses v10/v11, so this should be fine. If
   it ever breaks for you on Chrome, Firefox is the trivial fallback (plaintext
-  on every OS).
+  on every OS). Cookies with a `v20` prefix are now skipped (see decrypt
+  helpers note above) rather than corrupting the result.
 - **Chromium profiles**: only the `Default` profile is searched. Multi-profile
   users who keep claude.ai in `Profile 1` etc. would need that added.
 - **WAL mode**: only the main `Cookies` file is read. If a browser flushed a
   cookie write only to the WAL, we'd miss it until the next checkpoint. Not
   expected to matter for `sessionKey` (rarely changes).
+- **Linux Chrome with kwallet/gnome-keyring**: even with a fix to use
+  `--password-store=basic`, *existing* cookies were encrypted under the
+  keyring-derived key and won't decrypt with the basic-store fallback. A fresh
+  login to claude.ai is required after the switch.
 
 ## Tasks remaining (run these on the Linux machine)
 
@@ -105,7 +120,8 @@ Then in VS Code: **Ctrl+Shift+P → Developer: Reload Window**.
 ## Files referenced
 
 - `vscode-extension/src/browserCookies.js` — the rewritten reader
-- `vscode-extension/src/claudeApi.js:5-9` — `await readCookies()` and the
-  `/api/organizations/{orgId}/usage` request that produces the live numbers
-- `vscode-extension/extension.js:108` — `fetchUsage()` call site, with the
-  generic warning at line 119
+- `vscode-extension/src/claudeApi.js:5` — `await readCookies()` (cookie wiring)
+- `vscode-extension/src/claudeApi.js:37` — the `/api/organizations/{orgId}/usage`
+  request that produces the live numbers
+- `vscode-extension/extension.js:107` — `fetchUsage()` call site, with the
+  generic "log in to a supported browser" warning at line 119
