@@ -23,33 +23,76 @@
 
   <div id="body">
 
-    <!-- Session (base) -->
-    <div class="usage-row">
-      <div class="row-header">
-        <span class="row-label">Session</span>
-        <span class="row-right">
-          <span class="row-value" id="session-value">—</span><span class="row-limit" id="session-limit"></span>
-        </span>
-      </div>
-      <div class="progress-track">
-        <div class="progress-fill no-limit" id="session-bar" style="width:0%"></div>
-      </div>
-    </div>
-
-    <!-- Extra usage (hidden until > 0) -->
-    <div class="usage-row extra-row" id="row-extra" style="display:none">
-      <div class="row-header">
-        <span class="row-label extra-label">+Extra</span>
-        <span class="row-right">
-          <span class="row-value extra-value" id="extra-value">—</span>
-        </span>
-      </div>
-      <div class="progress-track">
-        <div class="progress-fill extra-fill" id="extra-bar" style="width:0%"></div>
+    <!-- Current Session -->
+    <div class="section">
+      <div class="section-label">Current Session</div>
+      <div class="usage-row" id="row-session">
+        <div class="row-header">
+          <span class="row-value" id="session-value">—</span>
+          <span class="row-meta" id="session-reset"></span>
+        </div>
+        <div class="progress-track">
+          <div class="progress-fill no-limit" id="session-bar" style="width:0%"></div>
+        </div>
       </div>
     </div>
 
-    <!-- Weekly rows — populated dynamically per model -->
+    <!-- Weekly Limits -->
+    <div class="section">
+      <div class="section-label">Weekly Limits</div>
+      <div class="usage-row">
+        <div class="row-header">
+          <span class="row-label">All models</span>
+          <span class="row-value" id="weekly-all-value">—</span>
+        </div>
+        <div class="progress-track">
+          <div class="progress-fill" id="weekly-all-bar" style="width:0%"></div>
+        </div>
+      </div>
+      <div class="usage-row" id="row-sonnet">
+        <div class="row-header">
+          <span class="row-label">Sonnet only</span>
+          <span class="row-value" id="weekly-sonnet-value">—</span>
+        </div>
+        <div class="progress-track">
+          <div class="progress-fill" id="weekly-sonnet-bar" style="width:0%"></div>
+        </div>
+      </div>
+      <div class="usage-row" id="row-design">
+        <div class="row-header">
+          <span class="row-label">Claude Design</span>
+          <span class="row-value" id="weekly-design-value">—</span>
+        </div>
+        <div class="progress-track">
+          <div class="progress-fill" id="weekly-design-bar" style="width:0%"></div>
+        </div>
+      </div>
+      <div class="reset-line" id="weekly-reset"></div>
+    </div>
+
+    <!-- Additional Features -->
+    <div class="section" id="section-features" style="display:none">
+      <div class="section-label">Additional Features</div>
+      <div class="meta-row">
+        <span class="row-label">Daily routine runs</span>
+        <span class="meta-value" id="routines-value">—</span>
+      </div>
+    </div>
+
+    <!-- Extra Usage -->
+    <div class="section" id="section-extra">
+      <div class="section-label">Extra Usage</div>
+      <div class="usage-row">
+        <div class="row-header">
+          <span class="row-value extra-label" id="extra-summary">—</span>
+        </div>
+        <div class="progress-track">
+          <div class="progress-fill extra-fill" id="extra-bar" style="width:0%"></div>
+        </div>
+      </div>
+    </div>
+
+    <!-- Local fallback weekly rows -->
     <div id="weekly-rows"></div>
 
   </div>

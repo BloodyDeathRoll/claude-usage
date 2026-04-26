@@ -1,7 +1,6 @@
 const fs   = require('fs');
 const path = require('path');
 const os   = require('os');
-const { glob } = require('glob');
 
 const CLAUDE_DIR        = path.join(os.homedir(), '.claude', 'projects');
 const SESSION_WINDOW_MS = 5 * 60 * 60 * 1000;
@@ -69,15 +68,24 @@ function parseFile(filePath, cutoff = null) {
   return { input, output, cacheRead, cacheCreate, byModel, oldest };
 }
 
+function findJsonl(dir, results = []) {
+  let entries;
+  try { entries = fs.readdirSync(dir, { withFileTypes: true }); } catch { return results; }
+  for (const e of entries) {
+    const full = path.join(dir, e.name);
+    if (e.isDirectory()) findJsonl(full, results);
+    else if (e.isFile() && e.name.endsWith('.jsonl')) results.push(full);
+  }
+  return results;
+}
+
 async function getUsage(cfg) {
   const now           = Date.now();
   const sessionCutoff = now - SESSION_WINDOW_MS;
   const weeklyCutoff  = now - WEEKLY_WINDOW_MS;
 
   let files;
-  try {
-    files = await glob('**/*.jsonl', { cwd: CLAUDE_DIR, absolute: true, nodir: true });
-  } catch { return null; }
+  try { files = findJsonl(CLAUDE_DIR); } catch { return null; }
   if (!files.length) return null;
 
   const withMtime = files.map(f => {

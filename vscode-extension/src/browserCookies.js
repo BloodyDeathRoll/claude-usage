@@ -13,20 +13,25 @@ import sqlite3, shutil, os, json, tempfile, glob, sys, platform
 def firefox_db():
     s = platform.system()
     if s == 'Linux':
-        base = os.path.expanduser("~/.config/mozilla/firefox")
+        bases = [
+            os.path.expanduser("~/.config/mozilla/firefox"),
+            os.path.expanduser("~/snap/firefox/common/.mozilla/firefox"),
+            os.path.expanduser("~/.var/app/org.mozilla.firefox/.mozilla/firefox"),
+        ]
     elif s == 'Darwin':
-        base = os.path.expanduser("~/Library/Application Support/Firefox")
+        bases = [os.path.expanduser("~/Library/Application Support/Firefox")]
     elif s == 'Windows':
-        base = os.path.join(os.environ.get('APPDATA',''), 'Mozilla','Firefox')
+        bases = [os.path.join(os.environ.get('APPDATA',''), 'Mozilla','Firefox')]
     else:
         return None
-    candidates = (
-        glob.glob(os.path.join(base,"*.default-release")) +
-        glob.glob(os.path.join(base,"*.default"))
-    )
-    for p in candidates:
-        db = os.path.join(p,"cookies.sqlite")
-        if os.path.exists(db): return db
+    for base in bases:
+        candidates = (
+            glob.glob(os.path.join(base,"*.default-release")) +
+            glob.glob(os.path.join(base,"*.default"))
+        )
+        for p in candidates:
+            db = os.path.join(p,"cookies.sqlite")
+            if os.path.exists(db): return db
     return None
 
 def chrome_db():

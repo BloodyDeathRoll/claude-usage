@@ -11,18 +11,20 @@ const { execSync } = require('child_process');
 
 const COOKIE_PY = `
 import sqlite3, shutil, os, json, tempfile, glob
-base = os.path.expanduser("~/.config/mozilla/firefox")
-if not os.path.exists(base): print("{}"); exit()
-candidates = (
-    glob.glob(os.path.join(base, "*.default-release")) +
-    glob.glob(os.path.join(base, "*.default"))
-)
-db = None
-for p in candidates:
-    c = os.path.join(p, "cookies.sqlite")
-    if os.path.exists(c):
-        db = c
-        break
+
+def find_db():
+    bases = [
+        os.path.expanduser("~/.config/mozilla/firefox"),
+        os.path.expanduser("~/snap/firefox/common/.mozilla/firefox"),
+        os.path.expanduser("~/.var/app/org.mozilla.firefox/.mozilla/firefox"),
+    ]
+    for base in bases:
+        for p in glob.glob(os.path.join(base,"*.default-release")) + glob.glob(os.path.join(base,"*.default")):
+            c = os.path.join(p, "cookies.sqlite")
+            if os.path.exists(c): return c
+    return None
+
+db = find_db()
 if not db: print("{}"); exit()
 tmp = tempfile.mktemp(suffix=".sqlite")
 shutil.copy2(db, tmp)
@@ -62,18 +64,26 @@ let fetcherOrgId = null;
 let fetcherReady = false;
 let initPromise = null;
 
+function slot(s) {
+  return s ? { pct: s.utilization ?? 0, resetsAt: s.resets_at ?? null } : null;
+}
+
 function parseFetchResult(data) {
   if (!data || !data.five_hour) return null;
   return {
-    source:      'api',
-    session:     data.five_hour     ? { pct: data.five_hour.utilization     ?? 0, resetsAt: data.five_hour.resets_at     } : null,
-    allModels:   data.seven_day     ? { pct: data.seven_day.utilization     ?? 0, resetsAt: data.seven_day.resets_at     } : null,
-    claudeDesign: data.seven_day_omelette ? { pct: data.seven_day_omelette.utilization ?? 0, resetsAt: data.seven_day_omelette.resets_at } : null,
-    extraUsage:  data.extra_usage
-      ? { enabled: data.extra_usage.is_enabled, usedCredits: data.extra_usage.used_credits,
-          pct: data.extra_usage.utilization, currency: data.extra_usage.currency,
-          monthlyLimit: data.extra_usage.monthly_limit }
-      : null,
+    source:           'api',
+    session:          slot(data.five_hour),
+    allModels:        slot(data.seven_day),
+    sonnetOnly:       slot(data.seven_day_sonnet),
+    claudeDesign:     slot(data.seven_day_cowork) ?? slot(data.seven_day_omelette),
+    dailyRoutineRuns: data.iguana_necktie ?? null,
+    extraUsage: data.extra_usage ? {
+      enabled:      data.extra_usage.is_enabled,
+      usedCredits:  data.extra_usage.used_credits,
+      monthlyLimit: data.extra_usage.monthly_limit,
+      pct:          data.extra_usage.utilization,
+      currency:     data.extra_usage.currency,
+    } : null,
     lastUpdated: new Date(),
   };
 }

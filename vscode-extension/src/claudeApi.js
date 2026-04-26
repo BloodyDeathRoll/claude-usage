@@ -65,15 +65,22 @@ async function fetchUsage() {
       let raw;
       try { raw = JSON.parse(body); } catch { return done({ error: 'parse' }); }
 
+      const slot = (key) => raw[key]
+        ? { pct: raw[key].utilization ?? 0, resetsAt: raw[key].resets_at }
+        : null;
+
       done({
-        source:     'api',
-        session:    raw.five_hour  ? { pct: raw.five_hour.utilization  ?? 0, resetsAt: raw.five_hour.resets_at  } : null,
-        allModels:  raw.seven_day  ? { pct: raw.seven_day.utilization  ?? 0, resetsAt: raw.seven_day.resets_at  } : null,
+        source:        'api',
+        session:       slot('five_hour'),
+        allModels:     slot('seven_day'),
+        sonnetOnly:    slot('seven_day_sonnet'),
+        claudeDesign:  slot('seven_day_cowork') ?? slot('seven_day_omelette'),
         extraUsage: raw.extra_usage
-          ? { enabled:     raw.extra_usage.is_enabled,
-              usedCredits: raw.extra_usage.used_credits,
-              pct:         raw.extra_usage.utilization,
-              currency:    raw.extra_usage.currency }
+          ? { enabled:       raw.extra_usage.is_enabled,
+              usedCredits:   raw.extra_usage.used_credits,
+              monthlyLimit:  raw.extra_usage.monthly_limit,
+              pct:           raw.extra_usage.utilization,
+              currency:      raw.extra_usage.currency }
           : null,
         lastUpdated: new Date(),
       });

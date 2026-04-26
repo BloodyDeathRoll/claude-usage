@@ -9,21 +9,32 @@ let pendingPlan = null;
 
 const $ = id => document.getElementById(id);
 
-const elNoData        = $('no-data');
-const elBodyRows      = $('body');
-const elFooter        = $('footer');
-const elSessionValue  = $('session-value');
-const elSessionLimit  = $('session-limit');
-const elSessionBar    = $('session-bar');
-const elRowExtra      = $('row-extra');
-const elExtraValue    = $('extra-value');
-const elExtraBar      = $('extra-bar');
-const elWeeklyRows    = $('weekly-rows');
-const elResetTimer    = $('reset-timer');
-const elLastSync      = $('last-sync');
-const elSettings      = $('settings-panel');
-const elCustomRow     = $('custom-row');
-const elCustomSession = $('custom-session');
+const elNoData         = $('no-data');
+const elBody           = $('body');
+const elFooter         = $('footer');
+const elSessionValue   = $('session-value');
+const elSessionReset   = $('session-reset');
+const elSessionBar     = $('session-bar');
+const elWeeklyAllValue = $('weekly-all-value');
+const elWeeklyAllBar   = $('weekly-all-bar');
+const elRowSonnet      = $('row-sonnet');
+const elSonnetValue    = $('weekly-sonnet-value');
+const elSonnetBar      = $('weekly-sonnet-bar');
+const elRowDesign      = $('row-design');
+const elDesignValue    = $('weekly-design-value');
+const elDesignBar      = $('weekly-design-bar');
+const elWeeklyReset    = $('weekly-reset');
+const elSectionFeatures = $('section-features');
+const elRoutinesValue  = $('routines-value');
+const elSectionExtra   = $('section-extra');
+const elExtraSummary   = $('extra-summary');
+const elExtraBar       = $('extra-bar');
+const elWeeklyRows     = $('weekly-rows');
+const elResetTimer     = $('reset-timer');
+const elLastSync       = $('last-sync');
+const elSettings       = $('settings-panel');
+const elCustomRow      = $('custom-row');
+const elCustomSession  = $('custom-session');
 
 // ── Formatting ────────────────────────────────────────────────────────────────
 
@@ -34,7 +45,14 @@ function fmt(n) {
 }
 
 function fmtPct(pct) {
+  if (pct == null) return '—';
   return pct.toFixed(1).replace(/\.0$/, '') + '%';
+}
+
+function fmtMoney(val, currency) {
+  if (val == null) return '—';
+  const sym = currency === 'usd' ? '$' : (currency ?? '$');
+  return sym + Number(val).toFixed(2);
 }
 
 function fmtCountdown(ms) {
@@ -45,6 +63,13 @@ function fmtCountdown(ms) {
   if (h > 0) return `↺ ${h}h ${String(m).padStart(2,'0')}m`;
   if (m > 0) return `↺ ${m}m ${String(s).padStart(2,'0')}s`;
   return `↺ ${s}s`;
+}
+
+function fmtResetDate(isoStr) {
+  if (!isoStr) return '';
+  const d = new Date(isoStr);
+  return 'Resets ' + d.toLocaleDateString('en-US', { weekday:'short', month:'short', day:'numeric' })
+       + ' ' + d.toLocaleTimeString('en-US', { hour:'numeric', minute:'2-digit' });
 }
 
 function fmtAgo(date) {
@@ -71,24 +96,14 @@ setInterval(() => {
   if (lastData) elLastSync.textContent = fmtAgo(lastData.lastUpdated);
 }, 1000);
 
-// ── Row builder ───────────────────────────────────────────────────────────────
+// ── Slot renderer helper ──────────────────────────────────────────────────────
 
-function makeRow(label, pct, sublabel) {
-  const row = document.createElement('div');
-  row.className = 'usage-row';
-  const cls = 'progress-fill ' + barClass(pct);
-  const width = Math.min(100, pct) + '%';
-  row.innerHTML = `
-    <div class="row-header">
-      <span class="row-label">${label}</span>
-      <span class="row-right">
-        <span class="row-value">${fmtPct(pct)}</span><span class="row-limit">${sublabel ? ' · ' + sublabel : ''}</span>
-      </span>
-    </div>
-    <div class="progress-track">
-      <div class="${cls}" style="width:${width}"></div>
-    </div>`;
-  return row;
+function applySlot(valueEl, barEl, slot, showClass) {
+  if (!slot) return;
+  const pct = slot.pct ?? 0;
+  valueEl.textContent = fmtPct(pct);
+  barEl.style.width   = Math.min(100, pct) + '%';
+  barEl.className     = 'progress-fill ' + barClass(pct);
 }
 
 // ── API data path ─────────────────────────────────────────────────────────────
@@ -96,59 +111,96 @@ function makeRow(label, pct, sublabel) {
 function applyApiUsage(data) {
   if (data.session?.resetsAt) resetAt = data.session.resetsAt;
 
-  elNoData.style.display   = 'none';
-  elBodyRows.style.display = 'flex';
-  elFooter.style.display   = 'flex';
+  elNoData.style.display = 'none';
+  elBody.style.display   = 'flex';
+  elFooter.style.display = 'flex';
 
-  // Session
+  // ── Current session ──────────────────────────────────────────────────────
   const sPct = data.session?.pct ?? 0;
+  elSessionValue.textContent = fmtPct(sPct);
   elSessionBar.style.width   = Math.min(100, sPct) + '%';
   elSessionBar.className     = 'progress-fill ' + barClass(sPct);
-  elSessionBar.style.opacity = '';
-  elSessionValue.textContent = fmtPct(sPct);
-  elSessionLimit.textContent = '';
+  elSessionReset.textContent = data.session?.resetsAt
+    ? fmtCountdown(new Date(data.session.resetsAt).getTime() - Date.now())
+    : '';
 
-  // Extra usage — show whenever enabled OR there is active spend/utilisation
-  const ex = data.extraUsage;
-  const hasExtraData = ex && (ex.enabled || ex.pct != null || (ex.usedCredits != null && ex.usedCredits > 0));
-  if (hasExtraData) {
-    elRowExtra.style.display = '';
-    const pct     = ex.pct ?? 0;
-    const credits = ex.usedCredits != null
-      ? (ex.currency === 'usd' ? '$' : '') + Number(ex.usedCredits).toFixed(2)
-      : '$0.00';
-    elExtraValue.textContent = credits + ' · ' + fmtPct(pct);
-    elExtraBar.style.width   = Math.min(100, pct) + '%';
-    // colour the bar by utilisation
-    elExtraBar.className = 'progress-fill extra-fill ' + barClass(pct);
+  // ── Weekly — All models ───────────────────────────────────────────────────
+  applySlot(elWeeklyAllValue, elWeeklyAllBar, data.allModels);
+
+  // ── Weekly — Sonnet only ──────────────────────────────────────────────────
+  if (data.sonnetOnly) {
+    elRowSonnet.style.display = '';
+    applySlot(elSonnetValue, elSonnetBar, data.sonnetOnly);
   } else {
-    elRowExtra.style.display = 'none';
+    elRowSonnet.style.display = 'none';
   }
 
-  // Weekly rows
-  elWeeklyRows.innerHTML = '';
-  if (data.allModels) {
-    elWeeklyRows.appendChild(makeRow('Weekly · All', data.allModels.pct));
+  // ── Weekly — Claude Design ────────────────────────────────────────────────
+  if (data.claudeDesign) {
+    elRowDesign.style.display = '';
+    applySlot(elDesignValue, elDesignBar, data.claudeDesign);
+  } else {
+    elRowDesign.style.display = 'none';
   }
+
+  // ── Weekly reset date ─────────────────────────────────────────────────────
+  const weeklyResets = data.allModels?.resetsAt ?? data.sonnetOnly?.resetsAt;
+  if (weeklyResets) {
+    elWeeklyReset.textContent = fmtResetDate(weeklyResets);
+    elWeeklyReset.classList.add('visible');
+  } else {
+    elWeeklyReset.classList.remove('visible');
+  }
+
+  // ── Additional features — Daily routine runs ──────────────────────────────
+  const runs = data.dailyRoutineRuns;
+  if (runs != null) {
+    elSectionFeatures.style.display = '';
+    if (typeof runs === 'object' && runs.utilization != null) {
+      elRoutinesValue.textContent = fmtPct(runs.utilization);
+    } else if (typeof runs === 'object' && runs.used != null) {
+      elRoutinesValue.textContent = runs.used + ' / ' + (runs.limit ?? '?');
+    } else {
+      elRoutinesValue.textContent = JSON.stringify(runs);
+    }
+  } else {
+    elSectionFeatures.style.display = 'none';
+  }
+
+  // ── Extra usage ───────────────────────────────────────────────────────────
+  const ex       = data.extraUsage;
+  const currency = ex?.currency ?? 'usd';
+  const spent    = ex?.usedCredits  ?? 0;
+  const limit    = ex?.monthlyLimit ?? null;
+  const balance  = limit != null ? Math.max(0, limit - spent) : null;
+  const pct      = ex?.pct ?? (limit ? Math.min(100, (spent / limit) * 100) : 0);
+
+  const spentStr   = fmtMoney(spent, currency);
+  const limitStr   = limit   != null ? fmtMoney(limit,   currency) : '?';
+  const balanceStr = balance != null ? fmtMoney(balance, currency) + ' left' : '—';
+  elExtraSummary.textContent = `${spentStr}/${limitStr} | ${balanceStr}`;
+
+  const disabled = !ex?.enabled;
+  elExtraBar.style.width     = Math.min(100, pct) + '%';
+  elExtraBar.className       = 'progress-fill extra-fill' + (disabled ? ' faded' : ' ' + barClass(pct));
+  elExtraSummary.className   = 'row-value extra-label' + (disabled ? ' faded' : '');
 
   elLastSync.textContent = fmtAgo(data.lastUpdated);
 }
 
 // ── Local (JSONL) data path ───────────────────────────────────────────────────
 
-function makeWeeklyRowLocal(label, billable, limit) {
+function makeWeeklyRow(label, billable, limit) {
   const row = document.createElement('div');
   row.className = 'usage-row';
-  let valueText, limitText, barWidth, cls, opacity = '';
+  let valueText, barWidth, cls, opacity = '';
   if (limit) {
     const pct = Math.min(100, (billable / limit) * 100);
     valueText = fmtPct(pct);
-    limitText = ' · ' + fmt(billable) + ' / ' + fmt(limit);
     barWidth  = pct + '%';
     cls       = 'progress-fill ' + barClass(pct);
   } else {
     valueText = fmt(billable);
-    limitText = '';
     barWidth  = '100%';
     cls       = 'progress-fill no-limit';
     opacity   = 'opacity:0.35;';
@@ -156,9 +208,7 @@ function makeWeeklyRowLocal(label, billable, limit) {
   row.innerHTML = `
     <div class="row-header">
       <span class="row-label">${label}</span>
-      <span class="row-right">
-        <span class="row-value">${valueText}</span><span class="row-limit">${limitText}</span>
-      </span>
+      <span class="row-value">${valueText}</span>
     </div>
     <div class="progress-track">
       <div class="${cls}" style="width:${barWidth};${opacity}"></div>
@@ -167,17 +217,24 @@ function makeWeeklyRowLocal(label, billable, limit) {
 }
 
 const WEEKLY_MODELS = [
-  { key: 'sonnet', label: 'Weekly · All'    },
-  { key: 'haiku',  label: 'Weekly · Design' },
-  { key: 'opus',   label: 'Weekly · Opus'   },
+  { key: 'sonnet', label: 'All / Sonnet' },
+  { key: 'haiku',  label: 'Haiku' },
+  { key: 'opus',   label: 'Opus' },
 ];
 
 function applyLocalUsage(data) {
   if (data.resetAt) resetAt = data.resetAt;
 
-  elNoData.style.display   = 'none';
-  elBodyRows.style.display = 'flex';
-  elFooter.style.display   = 'flex';
+  elNoData.style.display = 'none';
+  elBody.style.display   = 'flex';
+  elFooter.style.display = 'flex';
+
+  // Hide API-only sections
+  elRowSonnet.style.display      = 'none';
+  elRowDesign.style.display      = 'none';
+  elWeeklyReset.classList.remove('visible');
+  elSectionFeatures.style.display = 'none';
+  elSectionExtra.style.display   = 'none';
 
   const sessionLimit    = config?.sessionLimitTokens ?? null;
   const sessionBillable = data.session.billable ?? data.session.total;
@@ -192,24 +249,13 @@ function applyLocalUsage(data) {
     const pct = Math.min(100, (baseUsed / sessionLimit) * 100);
     elSessionBar.style.width   = pct + '%';
     elSessionBar.className     = 'progress-fill ' + barClass(pct);
-    elSessionBar.style.opacity = '';
     elSessionValue.textContent = fmtPct(pct);
-    elSessionLimit.textContent = ' · ' + fmt(sessionBillable) + ' / ' + fmt(sessionLimit);
+    elSessionReset.textContent = fmt(sessionBillable) + ' / ' + fmt(sessionLimit);
   } else {
-    elSessionLimit.textContent = '';
-    elSessionValue.textContent = fmt(data.session.total);
+    elSessionValue.textContent = fmt(sessionBillable);
+    elSessionReset.textContent = '';
     elSessionBar.style.width   = '100%';
     elSessionBar.className     = 'progress-fill no-limit';
-    elSessionBar.style.opacity = '0.35';
-  }
-
-  if (extraUsed > 0) {
-    elRowExtra.style.display = '';
-    elExtraValue.textContent = fmt(extraUsed);
-    const extraPct = sessionLimit ? Math.min(100, (extraUsed / sessionLimit) * 100) : 30;
-    elExtraBar.style.width = extraPct + '%';
-  } else {
-    elRowExtra.style.display = 'none';
   }
 
   elWeeklyRows.innerHTML = '';
@@ -219,10 +265,10 @@ function applyLocalUsage(data) {
     (byModel[key]?.billable > 0) || (modelLimits?.[key] > 0)
   );
   if (activeModels.length === 0) {
-    elWeeklyRows.appendChild(makeWeeklyRowLocal('Weekly', data.weekly.billable, config?.weeklyLimitTokens ?? null));
+    elWeeklyRows.appendChild(makeWeeklyRow('Weekly', data.weekly.billable, config?.weeklyLimitTokens ?? null));
   } else {
     for (const { key, label } of activeModels) {
-      elWeeklyRows.appendChild(makeWeeklyRowLocal(label, byModel[key]?.billable ?? 0, modelLimits?.[key] ?? null));
+      elWeeklyRows.appendChild(makeWeeklyRow(label, byModel[key]?.billable ?? 0, modelLimits?.[key] ?? null));
     }
   }
 
@@ -241,9 +287,9 @@ function applyUsage(data) {
 }
 
 function showNoData() {
-  elBodyRows.style.display = 'none';
-  elFooter.style.display   = 'none';
-  elNoData.style.display   = 'flex';
+  elBody.style.display   = 'none';
+  elFooter.style.display = 'none';
+  elNoData.style.display = 'flex';
 }
 
 // ── Settings panel ────────────────────────────────────────────────────────────

@@ -15,6 +15,10 @@
       {
         "command": "claudeUsage.refresh",
         "title": "Claude Usage: Refresh Now"
+      },
+      {
+        "command": "claudeUsage.openOverlay",
+        "title": "Claude Usage: Open Detailed Overlay"
       }
     ],
     "configuration": {

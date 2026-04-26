@@ -2,9 +2,26 @@ const vscode = require('vscode');
 const fs     = require('fs');
 const os     = require('os');
 const path   = require('path');
+const { spawn } = require('child_process');
 const { fetchUsage }  = require('./src/claudeApi');
 const { getUsage }    = require('./src/usageParser');
 const { hasPython }   = require('./src/browserCookies');
+
+const OVERLAY_DIR      = path.join(os.homedir(), 'Projects', 'usage');
+const OVERLAY_ELECTRON = path.join(OVERLAY_DIR, 'node_modules', '.bin', 'electron');
+
+function openOverlay() {
+  if (!fs.existsSync(OVERLAY_ELECTRON)) {
+    vscode.window.showWarningMessage('Claude Usage overlay not found at ~/Projects/usage.');
+    return;
+  }
+  const child = spawn(OVERLAY_ELECTRON, [OVERLAY_DIR], {
+    detached: true,
+    stdio: 'ignore',
+    cwd: OVERLAY_DIR,
+  });
+  child.unref();
+}
 
 const OVERLAY_CONFIG_PATH = path.join(os.homedir(), '.claude-overlay-config.json');
 
@@ -24,11 +41,12 @@ let cfFailCount = 0;     // consecutive Cloudflare 403s → nudge user
 
 function activate(context) {
   statusItem = vscode.window.createStatusBarItem(vscode.StatusBarAlignment.Right, 1000);
-  statusItem.command = 'claudeUsage.refresh';
+  statusItem.command = 'claudeUsage.openOverlay';
   statusItem.show();
 
   context.subscriptions.push(
     statusItem,
+    vscode.commands.registerCommand('claudeUsage.openOverlay', openOverlay),
     vscode.commands.registerCommand('claudeUsage.refresh', () => refresh(true)),
     { dispose: () => clearInterval(timer) },
   );
@@ -131,6 +149,20 @@ function themeColor(pct) {
   return undefined;
 }
 
+function usageRow(label, slot, extra) {
+  if (!slot) return '';
+  const pct = slot.pct;
+  const bar = miniBar(pct);
+  const val = pct != null ? `**${Math.round(pct)}%**` : fmt(slot.tokens ?? 0);
+  let line = `${label} ${bar} ${val}`;
+  if (extra) line += extra;
+  if (slot.resetsAt) {
+    const ms = new Date(slot.resetsAt).getTime() - Date.now();
+    line += `  *(resets ${ms > 0 ? fmtCountdown(ms) : 'soon'})*`;
+  }
+  return line + '\n\n';
+}
+
 function buildTooltip(data) {
   const md = new vscode.MarkdownString('', true);
   md.isTrusted = true;
@@ -138,30 +170,22 @@ function buildTooltip(data) {
   const sourceLabel = data.source === 'api' ? 'live' : 'local estimate';
   md.appendMarkdown(`### Claude Usage *(${sourceLabel})*\n\n`);
 
-  if (data.session) {
-    const pct = data.session.pct;
-    const bar = miniBar(pct);
-    const val = pct != null ? `**${Math.round(pct)}%**` : fmt(data.session.tokens ?? 0);
-    md.appendMarkdown(`**Session** ${bar} ${val}`);
-    if (data.session.resetsAt) {
-      const ms   = new Date(data.session.resetsAt).getTime() - Date.now();
-      md.appendMarkdown(`  *(resets ${ms > 0 ? fmtCountdown(ms) : 'soon'})*`);
-    }
-    md.appendMarkdown('\n\n');
-  }
+  md.appendMarkdown(usageRow('**Current session**', data.session));
 
-  if (data.allModels) {
-    const pct = data.allModels.pct;
-    const bar = miniBar(pct);
-    const val = pct != null ? `**${Math.round(pct)}%**` : fmt(data.allModels.tokens ?? 0);
-    md.appendMarkdown(`**Weekly** ${bar} ${val}\n\n`);
+  if (data.allModels || data.sonnetOnly || data.claudeDesign) {
+    md.appendMarkdown('**Weekly limits**\n\n');
+    md.appendMarkdown(usageRow('↳ All models', data.allModels));
+    md.appendMarkdown(usageRow('↳ Sonnet only', data.sonnetOnly));
+    md.appendMarkdown(usageRow('↳ Claude Design', data.claudeDesign));
   }
 
   const ex = data.extraUsage;
-  if (ex && (ex.enabled || (ex.pct != null && ex.pct > 0))) {
-    const pct     = ex.pct ?? 0;
-    const credits = ex.usedCredits != null ? `$${Number(ex.usedCredits).toFixed(2)}` : '$0.00';
-    md.appendMarkdown(`**Extra** ${miniBar(pct)} ${credits} · **${Math.round(pct)}%**\n\n`);
+  if (ex) {
+    if (ex.enabled || (ex.usedCredits != null && ex.usedCredits > 0)) {
+      const credits = ex.usedCredits != null ? `$${Number(ex.usedCredits).toFixed(2)}` : '$0.00';
+      const limit   = ex.monthlyLimit  != null ? ` / $${Number(ex.monthlyLimit).toFixed(2)}` : '';
+      md.appendMarkdown(`**Extra usage** ${miniBar(ex.pct)} ${credits}${limit}\n\n`);
+    }
   }
 
   md.appendMarkdown(`---\n*${fmtAgo(data.lastUpdated)}*`);

@@ -48,7 +48,7 @@ function createWindow() {
 
   win = new BrowserWindow({
     width: 300,
-    height: 270,
+    height: 420,
     x, y,
     alwaysOnTop: true,
     frame: false,
@@ -138,12 +138,21 @@ ipcMain.handle('get-config', () => loadConfig());
 
 // ── App lifecycle ─────────────────────────────────────────────────────────────
 
-app.whenReady().then(() => {
-  if (IS_MAC) app.dock.hide();
-  createWindow();
-  createTray();
-  startWatcher();
-  startPolling();
-});
+const gotLock = app.requestSingleInstanceLock();
+if (!gotLock) {
+  app.quit();
+} else {
+  app.on('second-instance', () => {
+    if (win) { win.show(); win.focus(); }
+  });
 
-app.on('window-all-closed', (e) => e.preventDefault());
+  app.whenReady().then(() => {
+    if (IS_MAC) app.dock.hide();
+    createWindow();
+    createTray();
+    startWatcher();
+    startPolling();
+  });
+
+  app.on('window-all-closed', (e) => e.preventDefault());
+}
