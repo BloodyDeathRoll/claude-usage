@@ -58,10 +58,17 @@ function readOverlayConfig() {
   catch { return null; }
 }
 
-const POLL_MS = 15_000;
+const POLL_MS         = 15_000;
+const WATCH_DEBOUNCE_MS = 750;
+const WATCH_MIN_GAP_MS  = 2_000;  // don't refresh more than once per 2s from the watcher
+
+const CLAUDE_PROJECTS_DIR = path.join(os.homedir(), '.claude', 'projects');
 
 let statusItem;
 let timer;
+let watcher;
+let watchDebounce;
+let lastWatchRefresh = 0;
 let lastSource = null;   // 'api' | 'local' | null
 let cfFailCount = 0;     // consecutive Cloudflare 403s → nudge user
 
@@ -77,10 +84,39 @@ function activate(context) {
     vscode.commands.registerCommand('claudeUsage.openOverlay', openOverlay),
     vscode.commands.registerCommand('claudeUsage.refresh', () => refresh(true)),
     { dispose: () => clearInterval(timer) },
+    { dispose: () => { try { watcher?.close(); } catch {} } },
   );
 
   refresh(false);
   timer = setInterval(() => refresh(false), POLL_MS);
+  startClaudeWatcher();
+}
+
+// Watch ~/.claude/projects/ for JSONL writes so we refresh the moment a
+// `claude` session starts producing data — instead of waiting up to 15s for
+// the next poll. Heavily debounced because JSONL grows on every message.
+function startClaudeWatcher() {
+  if (!fs.existsSync(CLAUDE_PROJECTS_DIR)) {
+    try { fs.mkdirSync(CLAUDE_PROJECTS_DIR, { recursive: true }); } catch { return; }
+  }
+  try {
+    watcher = fs.watch(CLAUDE_PROJECTS_DIR, { recursive: true }, (_event, filename) => {
+      if (!filename) return;
+      const name = filename.toString();
+      if (!name.endsWith('.jsonl')) return;
+      clearTimeout(watchDebounce);
+      watchDebounce = setTimeout(() => {
+        const now = Date.now();
+        if (now - lastWatchRefresh < WATCH_MIN_GAP_MS) return;
+        lastWatchRefresh = now;
+        refresh(false);
+      }, WATCH_DEBOUNCE_MS);
+    });
+    watcher.on('error', () => {});  // swallow — poll still runs
+  } catch {
+    // recursive fs.watch not supported on this platform/Node — fall through;
+    // the 15s poll still covers us.
+  }
 }
 
 // ── Data ──────────────────────────────────────────────────────────────────────
