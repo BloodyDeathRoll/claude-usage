@@ -5,7 +5,6 @@ const path   = require('path');
 const { spawn } = require('child_process');
 const { fetchUsage }  = require('./src/claudeApi');
 const { getUsage }    = require('./src/usageParser');
-const { hasPython }   = require('./src/browserCookies');
 
 function getOverlayDir() {
   const cfg = vscode.workspace.getConfiguration('claudeUsage').get('overlayPath');
@@ -116,9 +115,9 @@ async function refresh(manual) {
           'Open claude.ai'
         ).then(c => { if (c === 'Open claude.ai') vscode.env.openExternal(vscode.Uri.parse('https://claude.ai')); });
       }
-    } else if (apiResult.error === 'no_cookies' && manual && !hasPython()) {
+    } else if (apiResult.error === 'no_cookies' && manual) {
       vscode.window.showWarningMessage(
-        'Claude Usage: Python 3 is required to read browser cookies. Showing local token counts only.'
+        'Claude Usage: could not read claude.ai cookies from any installed browser. Log in to claude.ai in Firefox, Chrome, Brave, Edge, or Vivaldi, then run "Claude Usage: Refresh Now".'
       );
     }
 

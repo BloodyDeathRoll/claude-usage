@@ -43,7 +43,7 @@
     }
   },
   "dependencies": {
-    "glob": "^10.4.0"
+    "sql.js": "^1.10.3"
   },
   "devDependencies": {
     "@vscode/vsce": "^3.0.0"

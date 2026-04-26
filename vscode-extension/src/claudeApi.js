@@ -2,7 +2,7 @@ const http2 = require('http2');
 const { readCookies } = require('./browserCookies');
 
 async function fetchUsage() {
-  const cookies = readCookies();
+  const cookies = await readCookies();
   if (!cookies) return { error: 'no_cookies' };
 
   const { sessionKey, cf_clearance, lastActiveOrg: orgId } = cookies;

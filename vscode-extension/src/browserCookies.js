@@ -1,150 +1,299 @@
-// Reads claude.ai session cookies from Firefox or Chrome.
-// Uses a Python subprocess to parse SQLite — no native npm deps needed.
-// Chrome on Linux uses the well-known 'peanuts' default key for decryption.
+// Reads claude.ai session cookies from Firefox / Chrome / Brave / Edge / Vivaldi / Opera.
+// Pure Node — no Python, no native modules. SQLite is read with sql.js (WASM).
+//
+// Decryption per platform:
+//   Firefox            — plaintext (every OS)
+//   Chromium / Linux   — AES-128-CBC, key = PBKDF2('peanuts','saltysalt',1,sha1,16)
+//   Chromium / macOS   — AES-128-CBC, key = PBKDF2(<keychain pw>,'saltysalt',1003,sha1,16)
+//   Chromium / Windows — AES-256-GCM, key = DPAPI-unwrapped key from `Local State`
 
-const { execSync } = require('child_process');
 const fs   = require('fs');
 const os   = require('os');
 const path = require('path');
+const crypto       = require('crypto');
+const { execSync } = require('child_process');
 
-const PYTHON_SCRIPT = String.raw`
-import sqlite3, shutil, os, json, tempfile, glob, sys, platform
-
-def firefox_db():
-    s = platform.system()
-    if s == 'Linux':
-        bases = [
-            os.path.expanduser("~/.config/mozilla/firefox"),
-            os.path.expanduser("~/snap/firefox/common/.mozilla/firefox"),
-            os.path.expanduser("~/.var/app/org.mozilla.firefox/.mozilla/firefox"),
-        ]
-    elif s == 'Darwin':
-        bases = [os.path.expanduser("~/Library/Application Support/Firefox")]
-    elif s == 'Windows':
-        bases = [os.path.join(os.environ.get('APPDATA',''), 'Mozilla','Firefox')]
-    else:
-        return None
-    for base in bases:
-        candidates = (
-            glob.glob(os.path.join(base,"*.default-release")) +
-            glob.glob(os.path.join(base,"*.default"))
-        )
-        for p in candidates:
-            db = os.path.join(p,"cookies.sqlite")
-            if os.path.exists(db): return db
-    return None
-
-def chrome_db():
-    s = platform.system()
-    if s == 'Linux':
-        paths = [
-            "~/.config/google-chrome/Default/Cookies",
-            "~/.config/chromium/Default/Cookies",
-            "~/.config/BraveSoftware/Brave-Browser/Default/Cookies",
-            "~/.config/microsoft-edge/Default/Cookies",
-            "~/.config/vivaldi/Default/Cookies",
-            "~/.config/opera/Default/Cookies",
-            "~/.config/google-chrome-beta/Default/Cookies",
-            "~/.config/google-chrome-unstable/Default/Cookies",
-        ]
-    elif s == 'Darwin':
-        paths = [
-            "~/Library/Application Support/Google/Chrome/Default/Cookies",
-            "~/Library/Application Support/BraveSoftware/Brave-Browser/Default/Cookies",
-            "~/Library/Application Support/Microsoft Edge/Default/Cookies",
-            "~/Library/Application Support/Vivaldi/Default/Cookies",
-        ]
-    elif s == 'Windows':
-        local = os.environ.get('LOCALAPPDATA','')
-        paths = [
-            os.path.join(local,'Google','Chrome','User Data','Default','Cookies'),
-            os.path.join(local,'BraveSoftware','Brave-Browser','User Data','Default','Cookies'),
-            os.path.join(local,'Microsoft','Edge','User Data','Default','Cookies'),
-            os.path.join(local,'Vivaldi','User Data','Default','Cookies'),
-        ]
-    else:
-        return None
-    for p in paths:
-        db = os.path.expanduser(p)
-        if os.path.exists(db): return db
-    return None
-
-def read_sqlite(db, query):
-    tmp = tempfile.mktemp(suffix=".sqlite")
-    shutil.copy2(db, tmp)
-    try:
-        conn = sqlite3.connect(tmp)
-        rows = conn.execute(query).fetchall()
-        conn.close()
-        return rows
-    finally:
-        try: os.unlink(tmp)
-        except: pass
-
-def decrypt_chrome(enc):
-    if not enc: return ""
-    if not (enc[:3] in (b'v10',b'v11')): return enc.decode('utf-8','ignore')
-    try:
-        from Crypto.Cipher import AES
-        import hashlib
-        key = hashlib.pbkdf2_hmac('sha1',b'peanuts',b'saltysalt',1,dklen=16)
-        raw = AES.new(key, AES.MODE_CBC, IV=b' '*16).decrypt(enc[3:])
-        return raw[:-raw[-1]].decode('utf-8','ignore')
-    except:
-        return ""
-
-# --- Firefox (plaintext) ---
-cookies = {}
-ff = firefox_db()
-if ff:
-    try:
-        rows = read_sqlite(ff, "SELECT name,value FROM moz_cookies WHERE host LIKE '%claude.ai%'")
-        cookies = dict(rows)
-    except: pass
-
-# --- Chrome (encrypted, Linux peanuts key) ---
-if not cookies.get('sessionKey'):
-    ch = chrome_db()
-    if ch:
-        try:
-            rows = read_sqlite(ch, "SELECT name,value,encrypted_value FROM cookies WHERE host_key LIKE '%claude.ai%'")
-            ch_cookies = {}
-            for name,val,enc in rows:
-                ch_cookies[name] = val if val else decrypt_chrome(enc)
-            if ch_cookies.get('sessionKey'):
-                cookies = ch_cookies
-        except: pass
-
-print(json.dumps(cookies))
-`;
-
-let scriptPath = null;
-
-function getScriptPath() {
-  if (!scriptPath) {
-    scriptPath = path.join(os.tmpdir(), 'claude_usage_vsc_cookies.py');
-    fs.writeFileSync(scriptPath, PYTHON_SCRIPT);
-  }
-  return scriptPath;
+let SQL = null;
+async function getSQL() {
+  if (SQL) return SQL;
+  const initSqlJs = require('sql.js');
+  const distDir   = path.dirname(require.resolve('sql.js'));
+  SQL = await initSqlJs({ locateFile: f => path.join(distDir, f) });
+  return SQL;
 }
 
-/** Returns { sessionKey, lastActiveOrg, cf_clearance, ... } or null */
-function readCookies() {
+// ── SQLite helper ────────────────────────────────────────────────────────────
+// Always copy to a temp file before opening — the source DB may be locked by
+// the running browser, and a copy is also safer (we never write to the original).
+async function querySqlite(dbPath, query) {
+  const tmp = path.join(
+    os.tmpdir(),
+    `claude_usage_${process.pid}_${Date.now()}_${Math.random().toString(36).slice(2)}.sqlite`
+  );
+  let buf;
   try {
-    const out = execSync(`python3 "${getScriptPath()}"`, {
-      timeout: 6000, stdio: ['pipe', 'pipe', 'pipe'],
-    });
-    const data = JSON.parse(out.toString().trim());
-    return data.sessionKey ? data : null;
+    fs.copyFileSync(dbPath, tmp);
+    buf = fs.readFileSync(tmp);
+  } catch {
+    try { buf = fs.readFileSync(dbPath); }
+    catch { return []; }
+  } finally {
+    try { fs.unlinkSync(tmp); } catch {}
+  }
+
+  const sql = await getSQL();
+  const db  = new sql.Database(buf);
+  try {
+    const res = db.exec(query);
+    return res.length ? res[0].values : [];
+  } catch {
+    return [];
+  } finally {
+    try { db.close(); } catch {}
+  }
+}
+
+// ── Profile / DB locations ───────────────────────────────────────────────────
+function firefoxProfileBases() {
+  const p = os.platform();
+  if (p === 'linux') return [
+    path.join(os.homedir(), '.mozilla', 'firefox'),
+    path.join(os.homedir(), 'snap', 'firefox', 'common', '.mozilla', 'firefox'),
+    path.join(os.homedir(), '.var', 'app', 'org.mozilla.firefox', '.mozilla', 'firefox'),
+  ];
+  if (p === 'darwin') return [
+    path.join(os.homedir(), 'Library', 'Application Support', 'Firefox', 'Profiles'),
+  ];
+  if (p === 'win32') return [
+    path.join(process.env.APPDATA || '', 'Mozilla', 'Firefox', 'Profiles'),
+  ];
+  return [];
+}
+
+function findFirefoxDbs() {
+  const out = [];
+  for (const base of firefoxProfileBases()) {
+    let entries;
+    try { entries = fs.readdirSync(base); } catch { continue; }
+    for (const e of entries) {
+      if (!/\.default(-release|-esr)?$/.test(e) && !/\.default-/.test(e)) continue;
+      const db = path.join(base, e, 'cookies.sqlite');
+      if (fs.existsSync(db)) out.push(db);
+    }
+  }
+  return out;
+}
+
+// Returns [{ browser, userDataDir }] for every Chromium-based browser we know about.
+function chromiumLocations() {
+  const p = os.platform();
+  if (p === 'linux') {
+    const cfg = path.join(os.homedir(), '.config');
+    return [
+      { browser: 'Chrome',    userDataDir: path.join(cfg, 'google-chrome') },
+      { browser: 'Chrome',    userDataDir: path.join(cfg, 'google-chrome-beta') },
+      { browser: 'Chrome',    userDataDir: path.join(cfg, 'google-chrome-unstable') },
+      { browser: 'Chromium',  userDataDir: path.join(cfg, 'chromium') },
+      { browser: 'Brave',     userDataDir: path.join(cfg, 'BraveSoftware', 'Brave-Browser') },
+      { browser: 'Microsoft Edge', userDataDir: path.join(cfg, 'microsoft-edge') },
+      { browser: 'Vivaldi',   userDataDir: path.join(cfg, 'vivaldi') },
+      { browser: 'Opera',     userDataDir: path.join(cfg, 'opera') },
+    ];
+  }
+  if (p === 'darwin') {
+    const sup = path.join(os.homedir(), 'Library', 'Application Support');
+    return [
+      { browser: 'Chrome',         userDataDir: path.join(sup, 'Google', 'Chrome') },
+      { browser: 'Chromium',       userDataDir: path.join(sup, 'Chromium') },
+      { browser: 'Brave',          userDataDir: path.join(sup, 'BraveSoftware', 'Brave-Browser') },
+      { browser: 'Microsoft Edge', userDataDir: path.join(sup, 'Microsoft Edge') },
+      { browser: 'Vivaldi',        userDataDir: path.join(sup, 'Vivaldi') },
+    ];
+  }
+  if (p === 'win32') {
+    const local = process.env.LOCALAPPDATA || '';
+    return [
+      { browser: 'Chrome',         userDataDir: path.join(local, 'Google',        'Chrome',        'User Data') },
+      { browser: 'Brave',          userDataDir: path.join(local, 'BraveSoftware', 'Brave-Browser','User Data') },
+      { browser: 'Microsoft Edge', userDataDir: path.join(local, 'Microsoft',     'Edge',          'User Data') },
+      { browser: 'Vivaldi',        userDataDir: path.join(local, 'Vivaldi',                        'User Data') },
+    ];
+  }
+  return [];
+}
+
+// Cookies file moved from Default/Cookies → Default/Network/Cookies in newer Chromium.
+function findChromiumCookiesDb(userDataDir) {
+  for (const sub of ['Default']) {
+    for (const tail of [['Network', 'Cookies'], ['Cookies']]) {
+      const p = path.join(userDataDir, sub, ...tail);
+      if (fs.existsSync(p)) return p;
+    }
+  }
+  return null;
+}
+
+// ── Key derivation ───────────────────────────────────────────────────────────
+function deriveLinuxKey() {
+  return crypto.pbkdf2Sync('peanuts', 'saltysalt', 1, 16, 'sha1');
+}
+
+const MAC_KEYCHAIN_ACCOUNTS = {
+  'Chrome':         'Chrome',
+  'Chromium':       'Chromium',
+  'Brave':          'Brave',
+  'Microsoft Edge': 'Microsoft Edge',
+  'Vivaldi':        'Vivaldi',
+};
+
+function deriveMacKey(browser) {
+  const account = MAC_KEYCHAIN_ACCOUNTS[browser];
+  if (!account) return null;
+  let pw;
+  try {
+    pw = execSync(`security find-generic-password -wa ${JSON.stringify(account)}`, {
+      timeout: 5000,
+      stdio: ['ignore', 'pipe', 'pipe'],
+    }).toString().trim();
+  } catch { return null; }
+  if (!pw) return null;
+  return crypto.pbkdf2Sync(pw, 'saltysalt', 1003, 16, 'sha1');
+}
+
+// Windows: pull `os_crypt.encrypted_key` from `Local State`, strip the 'DPAPI'
+// magic, unprotect via PowerShell (no native module needed).
+function getWindowsMasterKey(userDataDir) {
+  const localState = path.join(userDataDir, 'Local State');
+  let parsed;
+  try { parsed = JSON.parse(fs.readFileSync(localState, 'utf8')); }
+  catch { return null; }
+  const b64 = parsed?.os_crypt?.encrypted_key;
+  if (!b64) return null;
+
+  const blob = Buffer.from(b64, 'base64');
+  if (blob.length < 5 || blob.slice(0, 5).toString() !== 'DPAPI') return null;
+  const dpapi = blob.slice(5);
+
+  const tmp = path.join(os.tmpdir(), `claude_usage_dpapi_${process.pid}_${Date.now()}.bin`);
+  try {
+    fs.writeFileSync(tmp, dpapi);
+    // PowerShell single-quoted strings are literal — backslashes don't need
+    // escaping. Double up any embedded single quotes (none expected in a
+    // tmpdir path, but be safe).
+    const psPath = `'${tmp.replace(/'/g, "''")}'`;
+    const psSrc =
+      `Add-Type -AssemblyName System.Security; ` +
+      `$b = [IO.File]::ReadAllBytes(${psPath}); ` +
+      `$d = [System.Security.Cryptography.ProtectedData]::Unprotect($b, $null, 'CurrentUser'); ` +
+      `[Convert]::ToBase64String($d)`;
+    const encoded = Buffer.from(psSrc, 'utf16le').toString('base64');
+    const out = execSync(`powershell -NoProfile -NonInteractive -EncodedCommand ${encoded}`, {
+      timeout: 8000,
+      stdio: ['ignore', 'pipe', 'pipe'],
+    }).toString().trim();
+    return Buffer.from(out, 'base64');
   } catch {
     return null;
+  } finally {
+    try { fs.unlinkSync(tmp); } catch {}
   }
 }
 
-/** True if Python 3 is available */
-function hasPython() {
-  try { execSync('python3 --version', { timeout: 3000, stdio: 'pipe' }); return true; }
-  catch { return false; }
+// ── Cookie value decryption ──────────────────────────────────────────────────
+function decryptCbc(enc, key) {
+  if (!enc || enc.length < 3) return '';
+  const prefix = enc.slice(0, 3).toString('utf8');
+  if (prefix !== 'v10' && prefix !== 'v11') {
+    try { return enc.toString('utf8'); } catch { return ''; }
+  }
+  const ct = enc.slice(3);
+  const iv = Buffer.alloc(16, 0x20); // 16 spaces
+  try {
+    const d = crypto.createDecipheriv('aes-128-cbc', key, iv);
+    return Buffer.concat([d.update(ct), d.final()]).toString('utf8');
+  } catch { return ''; }
 }
 
-module.exports = { readCookies, hasPython };
+// Chrome on Windows >= ~80: v10 prefix, AES-256-GCM, [3..15)=nonce, last 16 = tag.
+// Chromium on Linux v11 also uses GCM in some builds, but the existing extension's
+// reference behaviour (and what the page actually uses) is CBC there. Stick with
+// platform branching: Windows = GCM, others = CBC.
+function decryptGcm(enc, key) {
+  if (!enc || enc.length < 3 + 12 + 16) return '';
+  const prefix = enc.slice(0, 3).toString('utf8');
+  if (prefix !== 'v10' && prefix !== 'v11') {
+    try { return enc.toString('utf8'); } catch { return ''; }
+  }
+  const nonce = enc.slice(3, 15);
+  const ct    = enc.slice(15, enc.length - 16);
+  const tag   = enc.slice(enc.length - 16);
+  try {
+    const d = crypto.createDecipheriv('aes-256-gcm', key, nonce);
+    d.setAuthTag(tag);
+    return Buffer.concat([d.update(ct), d.final()]).toString('utf8');
+  } catch { return ''; }
+}
+
+// ── Per-browser readers ──────────────────────────────────────────────────────
+async function readFirefoxCookies() {
+  for (const db of findFirefoxDbs()) {
+    const rows = await querySqlite(
+      db,
+      "SELECT name, value FROM moz_cookies WHERE host LIKE '%claude.ai%'"
+    );
+    if (!rows.length) continue;
+    const cookies = {};
+    for (const [name, value] of rows) cookies[name] = value;
+    if (cookies.sessionKey) return cookies;
+  }
+  return null;
+}
+
+async function readChromiumCookies() {
+  const platform = os.platform();
+  for (const { browser, userDataDir } of chromiumLocations()) {
+    if (!fs.existsSync(userDataDir)) continue;
+    const dbPath = findChromiumCookiesDb(userDataDir);
+    if (!dbPath) continue;
+
+    let key = null;
+    if      (platform === 'linux')  key = deriveLinuxKey();
+    else if (platform === 'darwin') key = deriveMacKey(browser);
+    else if (platform === 'win32')  key = getWindowsMasterKey(userDataDir);
+    if (!key) continue;
+
+    const rows = await querySqlite(
+      dbPath,
+      "SELECT name, value, encrypted_value FROM cookies WHERE host_key LIKE '%claude.ai%'"
+    );
+    if (!rows.length) continue;
+
+    const cookies = {};
+    for (const [name, value, encVal] of rows) {
+      let v = value;
+      if (!v && encVal) {
+        const buf = Buffer.isBuffer(encVal) ? encVal : Buffer.from(encVal);
+        v = platform === 'win32' ? decryptGcm(buf, key) : decryptCbc(buf, key);
+      }
+      cookies[name] = v;
+    }
+    if (cookies.sessionKey) return cookies;
+  }
+  return null;
+}
+
+// ── Public API ───────────────────────────────────────────────────────────────
+/** Returns { sessionKey, lastActiveOrg, cf_clearance, ... } or null */
+async function readCookies() {
+  try {
+    const ff = await readFirefoxCookies();
+    if (ff && ff.sessionKey) return ff;
+  } catch {}
+  try {
+    const ch = await readChromiumCookies();
+    if (ch && ch.sessionKey) return ch;
+  } catch {}
+  return null;
+}
+
+module.exports = { readCookies };
