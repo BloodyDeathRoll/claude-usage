@@ -1,7 +1,7 @@
 {
   "name": "claude-usage",
   "displayName": "Claude Usage",
-  "description": "Real-time Claude Code session and weekly token usage in the status bar. Reads live data from claude.ai (Firefox/Chrome) with local JSONL fallback.",
+  "description": "Real-time Claude Code session and weekly token usage in the status bar. Shows live data from overlay cache with local JSONL fallback.",
   "version": "0.1.2",
   "publisher": "shahar",
   "license": "MIT",
@@ -50,10 +50,7 @@
       }
     }
   },
-  "dependencies": {
-    "sql.js": "^1.10.3"
-  },
-  "devDependencies": {
+"devDependencies": {
     "@vscode/vsce": "^3.0.0"
   }
 }

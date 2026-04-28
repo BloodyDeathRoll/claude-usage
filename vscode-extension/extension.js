@@ -3,7 +3,6 @@ const fs     = require('fs');
 const os     = require('os');
 const path   = require('path');
 const { spawn } = require('child_process');
-const { fetchUsage }  = require('./src/claudeApi');
 const { getUsage }    = require('./src/usageParser');
 
 function getOverlayDir() {
@@ -70,7 +69,6 @@ let watcher;
 let watchDebounce;
 let lastWatchRefresh = 0;
 let lastSource = null;   // 'api' | 'local' | null
-let cfFailCount = 0;     // consecutive Cloudflare 403s → nudge user
 
 // ── Activation ────────────────────────────────────────────────────────────────
 
@@ -135,49 +133,26 @@ function readCache() {
 async function refresh(manual) {
   const cfg = vscode.workspace.getConfiguration('claudeUsage');
 
-  // 1. Prefer the cache written by the overlay app — exact API data, no Cloudflare issues
+  // 1. Prefer the cache written by the overlay app — exact API data
   const cached = readCache();
-  if (cached) { cfFailCount = 0; render(cached); return; }
+  if (cached) { render(cached); return; }
 
-  // 2. Try live API directly via browser cookies
-  const apiResult = await fetchUsage();
+  // 2. Fall back to JSONL local counting
+  const overlayCfg = readOverlayConfig();
+  const localData = await getUsage({
+    sessionLimitTokens: cfg.get('sessionLimitTokens') || overlayCfg?.sessionLimitTokens || 320000,
+    weeklyLimitTokens:  cfg.get('weeklyLimitTokens')  || overlayCfg?.weeklyLimitTokens  || 461000,
+    weeklyModelLimits:  cfg.get('weeklyModelLimits')  || overlayCfg?.weeklyModelLimits  || { sonnet: 436000, haiku: 25000, opus: 0 },
+  });
 
-  if (apiResult.error) {
-    if (apiResult.error === 'cloudflare') {
-      cfFailCount++;
-      if (cfFailCount === 3 || manual) {
-        vscode.window.showInformationMessage(
-          'Claude Usage: open claude.ai in your browser to refresh authentication.',
-          'Open claude.ai'
-        ).then(c => { if (c === 'Open claude.ai') vscode.env.openExternal(vscode.Uri.parse('https://claude.ai')); });
-      }
-    } else if (apiResult.error === 'no_cookies' && manual) {
-      vscode.window.showWarningMessage(
-        'Claude Usage: could not read claude.ai cookies from any installed browser. Log in to claude.ai in Firefox, Chrome, Brave, Edge, or Vivaldi, then run "Claude Usage: Refresh Now".'
-      );
-    }
-
-    // 3. Fall back to JSONL local counting
-    const overlayCfg = readOverlayConfig();
-    const localData = await getUsage({
-      sessionLimitTokens: cfg.get('sessionLimitTokens') || overlayCfg?.sessionLimitTokens || 320000,
-      weeklyLimitTokens:  cfg.get('weeklyLimitTokens')  || overlayCfg?.weeklyLimitTokens  || 461000,
-      weeklyModelLimits:  cfg.get('weeklyModelLimits')  || overlayCfg?.weeklyModelLimits  || { sonnet: 436000, haiku: 25000, opus: 0 },
-    });
-
-    if (!localData) {
-      statusItem.text    = '$(cloud-offline) Claude: —';
-      statusItem.color   = undefined;
-      statusItem.tooltip = 'Claude Usage: no data found.\nMake sure Claude Code has been used recently.';
-      return;
-    }
-
-    render(localData);
+  if (!localData) {
+    statusItem.text    = '$(cloud-offline) Claude: —';
+    statusItem.color   = undefined;
+    statusItem.tooltip = 'Claude Usage: no data found.\nMake sure Claude Code has been used recently.';
     return;
   }
 
-  cfFailCount = 0;
-  render(apiResult);
+  render(localData);
 }
 
 // ── Rendering ─────────────────────────────────────────────────────────────────
