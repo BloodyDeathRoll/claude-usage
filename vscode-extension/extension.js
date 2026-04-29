@@ -2,8 +2,83 @@ const vscode = require('vscode');
 const fs     = require('fs');
 const os     = require('os');
 const path   = require('path');
+const https  = require('https');
 const { spawn } = require('child_process');
-const { getUsage }    = require('./src/usageParser');
+const { getUsage } = require('./src/usageParser');
+
+// ── OAuth direct fetch ────────────────────────────────────────────────────────
+
+const CLAUDE_CREDS_PATH = path.join(os.homedir(), '.claude', '.credentials.json');
+
+function readOAuthToken() {
+  try {
+    const oauth = JSON.parse(fs.readFileSync(CLAUDE_CREDS_PATH, 'utf8'))?.claudeAiOauth;
+    if (!oauth?.accessToken) return null;
+    if (oauth.expiresAt && Date.now() > oauth.expiresAt) return null;
+    return oauth.accessToken;
+  } catch { return null; }
+}
+
+function httpsGetJson(url, token) {
+  return new Promise((resolve, reject) => {
+    const u = new URL(url);
+    const req = https.request({
+      hostname: u.hostname, path: u.pathname + u.search, method: 'GET',
+      headers: { 'Authorization': 'Bearer ' + token, 'Accept': 'application/json' },
+      timeout: 8000,
+    }, (res) => {
+      let body = '';
+      res.on('data', d => { body += d; });
+      res.on('end', () => {
+        if (res.statusCode !== 200) { reject(new Error(`HTTP ${res.statusCode}`)); return; }
+        try { resolve(JSON.parse(body)); } catch (e) { reject(e); }
+      });
+    });
+    req.on('timeout', () => { req.destroy(); reject(new Error('timeout')); });
+    req.on('error', reject);
+    req.end();
+  });
+}
+
+function parseApiResult(data) {
+  if (!data?.five_hour) return null;
+  const slot = s => s ? { pct: s.utilization ?? 0, resetsAt: s.resets_at ?? null } : null;
+  return {
+    source:       'api',
+    session:      slot(data.five_hour),
+    allModels:    slot(data.seven_day),
+    sonnetOnly:   slot(data.seven_day_sonnet),
+    claudeDesign: slot(data.seven_day_cowork) ?? slot(data.seven_day_omelette),
+    extraUsage: data.extra_usage ? {
+      enabled:      data.extra_usage.is_enabled,
+      usedCredits:  data.extra_usage.used_credits,
+      monthlyLimit: data.extra_usage.monthly_limit,
+      pct:          data.extra_usage.utilization,
+      currency:     data.extra_usage.currency,
+    } : null,
+    lastUpdated: new Date(),
+  };
+}
+
+let cachedOrgId = null;
+
+async function fetchWithOAuth() {
+  const token = readOAuthToken();
+  if (!token) return null;
+  try {
+    if (!cachedOrgId) {
+      const bs = await httpsGetJson('https://claude.ai/api/bootstrap', token);
+      cachedOrgId = bs?.account?.memberships?.[0]?.organization?.uuid
+                 ?? bs?.account?.memberships?.[0]?.organization?.id
+                 ?? bs?.organizations?.[0]?.uuid
+                 ?? bs?.organizations?.[0]?.id
+                 ?? null;
+    }
+    if (!cachedOrgId) return null;
+    const raw = await httpsGetJson(`https://claude.ai/api/organizations/${cachedOrgId}/usage`, token);
+    return parseApiResult(raw);
+  } catch { cachedOrgId = null; return null; }
+}
 
 function getOverlayDir() {
   const cfg = vscode.workspace.getConfiguration('claudeUsage').get('overlayPath');
@@ -137,7 +212,15 @@ async function refresh(manual) {
   const cached = readCache();
   if (cached) { render(cached); return; }
 
-  // 2. Fall back to JSONL local counting
+  // 2. Direct OAuth fetch (works without a browser session)
+  const apiData = await fetchWithOAuth();
+  if (apiData) {
+    try { fs.writeFileSync(CACHE_PATH, JSON.stringify(apiData)); } catch {}
+    render(apiData);
+    return;
+  }
+
+  // 3. Fall back to JSONL local counting
   const overlayCfg = readOverlayConfig();
   const localData = await getUsage({
     sessionLimitTokens: cfg.get('sessionLimitTokens') || overlayCfg?.sessionLimitTokens || 320000,

@@ -2,7 +2,7 @@
   "name": "claude-usage",
   "displayName": "Claude Usage",
   "description": "Real-time Claude Code session and weekly token usage in the status bar. Shows live data from overlay cache with local JSONL fallback.",
-  "version": "0.1.2",
+  "version": "0.1.3",
   "publisher": "shahar",
   "license": "MIT",
   "repository": {
@@ -13,10 +13,22 @@
   "bugs": {
     "url": "https://github.com/BloodyDeathRoll/claude-usage/issues"
   },
-  "engines": { "vscode": "^1.85.0" },
-  "categories": ["Other"],
-  "keywords": ["claude", "anthropic", "usage", "tokens", "ai"],
-  "activationEvents": ["onStartupFinished"],
+  "engines": {
+    "vscode": "^1.85.0"
+  },
+  "categories": [
+    "Other"
+  ],
+  "keywords": [
+    "claude",
+    "anthropic",
+    "usage",
+    "tokens",
+    "ai"
+  ],
+  "activationEvents": [
+    "onStartupFinished"
+  ],
   "main": "./extension.js",
   "contributes": {
     "commands": [
@@ -33,24 +45,33 @@
       "title": "Claude Usage",
       "properties": {
         "claudeUsage.sessionLimitTokens": {
-          "type": ["number", "null"],
+          "type": [
+            "number",
+            "null"
+          ],
           "default": null,
           "description": "Session token limit for your plan (used for local fallback %). Pro=320000, Max5=1600000, Max20=6400000. Leave null to show raw counts."
         },
         "claudeUsage.weeklyLimitTokens": {
-          "type": ["number", "null"],
+          "type": [
+            "number",
+            "null"
+          ],
           "default": null,
           "description": "Weekly token limit for your plan (used for local fallback %)."
         },
         "claudeUsage.weeklyModelLimits": {
-          "type": ["object", "null"],
+          "type": [
+            "object",
+            "null"
+          ],
           "default": null,
           "description": "Per-model weekly limits, e.g. { \"sonnet\": 436000, \"haiku\": 25000 }. Used for local fallback only."
         }
       }
     }
   },
-"devDependencies": {
+  "devDependencies": {
     "@vscode/vsce": "^3.0.0"
   }
 }

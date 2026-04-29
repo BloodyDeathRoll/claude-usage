@@ -1,13 +1,29 @@
 // Fetches real-time usage from claude.ai via a hidden Electron BrowserWindow.
-// Using a real Chromium window solves Cloudflare bot-detection transparently;
-// raw Node.js https requests fail because their TLS fingerprint doesn't match.
+// Chromium's network stack bypasses Cloudflare bot-detection transparently.
+//
+// Auth priority:
+//   1. Claude Code OAuth token  (~/.claude/.credentials.json)  — no browser needed
+//   2. Firefox session cookie   (fallback if credentials missing/expired)
 
-const fs  = require('fs');
-const os  = require('os');
+const fs   = require('fs');
+const os   = require('os');
 const path = require('path');
 const { execSync } = require('child_process');
 
-// ── Firefox cookie reader ────────────────────────────────────────────────────
+// ── OAuth credentials reader ──────────────────────────────────────────────────
+
+const CLAUDE_CREDS = path.join(os.homedir(), '.claude', '.credentials.json');
+
+function readOAuthToken() {
+  try {
+    const oauth = JSON.parse(fs.readFileSync(CLAUDE_CREDS, 'utf8'))?.claudeAiOauth;
+    if (!oauth?.accessToken) return null;
+    if (oauth.expiresAt && Date.now() > oauth.expiresAt) return null;
+    return oauth.accessToken;
+  } catch { return null; }
+}
+
+// ── Firefox cookie reader (fallback) ─────────────────────────────────────────
 
 const COOKIE_PY = `
 import sqlite3, shutil, os, json, tempfile, glob
@@ -59,10 +75,11 @@ function readFirefoxCookies() {
 
 // ── Hidden BrowserWindow fetcher ─────────────────────────────────────────────
 
-let fetcherWin = null;
-let fetcherOrgId = null;
+let fetcherWin   = null;
+let fetcherToken = null;   // OAuth Bearer token (null = using cookie auth)
+let fetcherOrgId = null;   // resolved on first fetch when using OAuth
 let fetcherReady = false;
-let initPromise = null;
+let initPromise  = null;
 
 function slot(s) {
   return s ? { pct: s.utilization ?? 0, resetsAt: s.resets_at ?? null } : null;
@@ -91,14 +108,25 @@ function parseFetchResult(data) {
 async function initFetcher() {
   const { BrowserWindow } = require('electron');
 
-  const cookies = readFirefoxCookies();
-  const sessionKey = cookies['sessionKey'];
-  const orgId      = cookies['lastActiveOrg'];
-  if (!sessionKey || !orgId) return false;
-  fetcherOrgId = orgId;
+  // ── Determine auth method ────────────────────────────────────────────────
+  let cookieToInject = null;
+
+  const oauthToken = readOAuthToken();
+  if (oauthToken) {
+    fetcherToken = oauthToken;
+    fetcherOrgId = null;  // resolved lazily via /api/bootstrap on first fetchUsage()
+  } else {
+    // Fall back to Firefox session cookie
+    const cookies   = readFirefoxCookies();
+    const sessionKey = cookies['sessionKey'];
+    const orgId      = cookies['lastActiveOrg'];
+    if (!sessionKey || !orgId) return false;
+    fetcherToken     = null;
+    fetcherOrgId     = orgId;
+    cookieToInject   = sessionKey;
+  }
 
   if (fetcherWin && !fetcherWin.isDestroyed() && fetcherReady) return true;
-
   if (fetcherWin && !fetcherWin.isDestroyed()) fetcherWin.destroy();
   fetcherReady = false;
 
@@ -107,16 +135,21 @@ async function initFetcher() {
     webPreferences: { contextIsolation: true, nodeIntegration: false },
   });
 
-  fetcherWin.on('closed', () => { fetcherWin = null; fetcherReady = false; initPromise = null; });
-
-  // Inject the session key so claude.ai knows who the user is
-  await fetcherWin.webContents.session.cookies.set({
-    url: 'https://claude.ai', name: 'sessionKey', value: sessionKey,
-    domain: 'claude.ai', path: '/', secure: true, httpOnly: true, sameSite: 'lax',
-    expirationDate: Math.floor(Date.now() / 1000) + 86400 * 30,
+  fetcherWin.on('closed', () => {
+    fetcherWin   = null;
+    fetcherReady = false;
+    initPromise  = null;
   });
 
-  // Load claude.ai — Chromium solves any Cloudflare JS challenge automatically
+  if (cookieToInject) {
+    await fetcherWin.webContents.session.cookies.set({
+      url: 'https://claude.ai', name: 'sessionKey', value: cookieToInject,
+      domain: 'claude.ai', path: '/', secure: true, httpOnly: true, sameSite: 'lax',
+      expirationDate: Math.floor(Date.now() / 1000) + 86400 * 30,
+    });
+  }
+
+  // Load claude.ai — Chromium resolves any Cloudflare JS challenge automatically
   await new Promise((resolve) => {
     const timeout = setTimeout(resolve, 30000);
     fetcherWin.webContents.once('did-finish-load', () => { clearTimeout(timeout); resolve(); });
@@ -128,7 +161,6 @@ async function initFetcher() {
 }
 
 async function fetchUsage() {
-  // Serialise init calls so we don't spin up multiple windows in parallel
   if (!fetcherReady || !fetcherWin || fetcherWin.isDestroyed()) {
     if (!initPromise) initPromise = initFetcher().finally(() => { initPromise = null; });
     const ok = await initPromise;
@@ -138,12 +170,43 @@ async function fetchUsage() {
   if (!fetcherWin || fetcherWin.isDestroyed()) return null;
 
   try {
+    // Pass auth context into page so we don't embed secrets in template literals
+    await fetcherWin.webContents.executeJavaScript(
+      `window.__ct = ${JSON.stringify(fetcherToken ?? null)};` +
+      `window.__oi = ${JSON.stringify(fetcherOrgId ?? null)};`
+    );
+
+    // Resolve orgId via /api/bootstrap when using OAuth (only needed once)
+    if (!fetcherOrgId) {
+      const orgId = await fetcherWin.webContents.executeJavaScript(`
+        (async () => {
+          if (!window.__ct) return null;
+          try {
+            const r = await fetch('/api/bootstrap', {
+              headers: { 'Authorization': 'Bearer ' + window.__ct, 'Accept': 'application/json' }
+            });
+            if (!r.ok) return null;
+            const d = await r.json();
+            // Try several known paths for the organisation UUID
+            return d?.account?.memberships?.[0]?.organization?.uuid
+                ?? d?.account?.memberships?.[0]?.organization?.id
+                ?? d?.organizations?.[0]?.uuid
+                ?? d?.organizations?.[0]?.id
+                ?? null;
+          } catch { return null; }
+        })()
+      `);
+      if (!orgId) return null;
+      fetcherOrgId = orgId;
+      await fetcherWin.webContents.executeJavaScript(`window.__oi = ${JSON.stringify(orgId)};`);
+    }
+
     const data = await fetcherWin.webContents.executeJavaScript(`
       (async () => {
         try {
-          const r = await fetch('/api/organizations/${fetcherOrgId}/usage', {
-            headers: { 'Accept': 'application/json' }
-          });
+          const headers = { 'Accept': 'application/json' };
+          if (window.__ct) headers['Authorization'] = 'Bearer ' + window.__ct;
+          const r = await fetch('/api/organizations/' + window.__oi + '/usage', { headers });
           if (!r.ok) return null;
           return await r.json();
         } catch { return null; }
