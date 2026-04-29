@@ -6,7 +6,10 @@ const https  = require('https');
 const { spawn } = require('child_process');
 const { getUsage } = require('./src/usageParser');
 
-// ── OAuth direct fetch ────────────────────────────────────────────────────────
+// ── OAuth direct fetch via inference API headers ──────────────────────────────
+// api.anthropic.com/v1/messages accepts the Claude Code OAuth token with the
+// oauth-2025-04-20 beta header. Rate-limit utilization comes back in the
+// response headers — no browser session or Cloudflare bypass needed.
 
 const CLAUDE_CREDS_PATH = path.join(os.homedir(), '.claude', '.credentials.json');
 
@@ -19,65 +22,64 @@ function readOAuthToken() {
   } catch { return null; }
 }
 
-function httpsGetJson(url, token) {
-  return new Promise((resolve, reject) => {
-    const u = new URL(url);
-    const req = https.request({
-      hostname: u.hostname, path: u.pathname + u.search, method: 'GET',
-      headers: { 'Authorization': 'Bearer ' + token, 'Accept': 'application/json' },
-      timeout: 8000,
-    }, (res) => {
-      let body = '';
-      res.on('data', d => { body += d; });
-      res.on('end', () => {
-        if (res.statusCode !== 200) { reject(new Error(`HTTP ${res.statusCode}`)); return; }
-        try { resolve(JSON.parse(body)); } catch (e) { reject(e); }
-      });
-    });
-    req.on('timeout', () => { req.destroy(); reject(new Error('timeout')); });
-    req.on('error', reject);
-    req.end();
-  });
-}
-
-function parseApiResult(data) {
-  if (!data?.five_hour) return null;
-  const slot = s => s ? { pct: s.utilization ?? 0, resetsAt: s.resets_at ?? null } : null;
+function parseRateLimitHeaders(headers) {
+  const h = name => headers[name.toLowerCase()] ?? null;
+  const fiveHUtil   = h('anthropic-ratelimit-unified-5h-utilization');
+  const sevenDUtil  = h('anthropic-ratelimit-unified-7d-utilization');
+  const fiveHReset  = h('anthropic-ratelimit-unified-5h-reset');
+  const sevenDReset = h('anthropic-ratelimit-unified-7d-reset');
+  const overageSt   = h('anthropic-ratelimit-unified-overage-status');
+  if (fiveHUtil == null && sevenDUtil == null) return null;
+  // Headers are 0–1 fractions; renderer/tooltip expects 0–100 percentages.
+  const slot = (utilStr, resetStr) => utilStr == null ? null : {
+    pct:      parseFloat(utilStr) * 100,
+    resetsAt: resetStr ? new Date(parseInt(resetStr, 10) * 1000).toISOString() : null,
+  };
   return {
     source:       'api',
-    session:      slot(data.five_hour),
-    allModels:    slot(data.seven_day),
-    sonnetOnly:   slot(data.seven_day_sonnet),
-    claudeDesign: slot(data.seven_day_cowork) ?? slot(data.seven_day_omelette),
-    extraUsage: data.extra_usage ? {
-      enabled:      data.extra_usage.is_enabled,
-      usedCredits:  data.extra_usage.used_credits,
-      monthlyLimit: data.extra_usage.monthly_limit,
-      pct:          data.extra_usage.utilization,
-      currency:     data.extra_usage.currency,
+    session:      slot(fiveHUtil,  fiveHReset),
+    allModels:    slot(sevenDUtil, sevenDReset),
+    sonnetOnly:   null,
+    claudeDesign: null,
+    extraUsage: overageSt != null ? {
+      enabled: overageSt === 'allowed',
+      usedCredits: null, monthlyLimit: null, pct: null, currency: null,
     } : null,
     lastUpdated: new Date(),
   };
 }
 
-let cachedOrgId = null;
-
 async function fetchWithOAuth() {
   const token = readOAuthToken();
   if (!token) return null;
-  try {
-    if (!cachedOrgId) {
-      const bs = await httpsGetJson('https://claude.ai/api/bootstrap', token);
-      cachedOrgId = bs?.account?.memberships?.[0]?.organization?.uuid
-                 ?? bs?.account?.memberships?.[0]?.organization?.id
-                 ?? bs?.organizations?.[0]?.uuid
-                 ?? bs?.organizations?.[0]?.id
-                 ?? null;
-    }
-    if (!cachedOrgId) return null;
-    const raw = await httpsGetJson(`https://claude.ai/api/organizations/${cachedOrgId}/usage`, token);
-    return parseApiResult(raw);
-  } catch { cachedOrgId = null; return null; }
+
+  const body = Buffer.from(JSON.stringify({
+    model: 'claude-haiku-4-5-20251001', max_tokens: 1,
+    messages: [{ role: 'user', content: 'hi' }],
+  }));
+
+  return new Promise((resolve) => {
+    const req = https.request({
+      hostname: 'api.anthropic.com',
+      path:     '/v1/messages',
+      method:   'POST',
+      headers: {
+        'Authorization':     `Bearer ${token}`,
+        'anthropic-version': '2023-06-01',
+        'anthropic-beta':    'oauth-2025-04-20',
+        'Content-Type':      'application/json',
+        'Content-Length':    body.length,
+      },
+      timeout: 10000,
+    }, (res) => {
+      res.resume();
+      resolve(parseRateLimitHeaders(res.headers));
+    });
+    req.on('timeout', () => { req.destroy(); resolve(null); });
+    req.on('error',   () => resolve(null));
+    req.write(body);
+    req.end();
+  });
 }
 
 function getOverlayDir() {
