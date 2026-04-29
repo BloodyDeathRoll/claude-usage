@@ -2,11 +2,12 @@
 //
 //   1. Electron BrowserWindow → claude.ai JSON API (full data: all rows)
 //      Uses the sessionKey cookie stored in the Electron session.
-//      No Bearer token is sent — the cookie authenticates the request.
+//      The org ID comes from the lastActiveOrg cookie (NOT the bootstrap
+//      memberships array, which returns a different org).
 //
-//   2. Inference API headers  → api.anthropic.com (partial: 5h + 7d only)
+//   2. Inference API headers → api.anthropic.com (partial: 5h + 7d only)
 //      Uses the Claude Code OAuth token with anthropic-beta: oauth-2025-04-20.
-//      Falls back to this when the stored session cookie is expired.
+//      Falls back here when the stored session cookie is expired.
 
 const fs    = require('fs');
 const os    = require('os');
@@ -29,17 +30,18 @@ function readOAuthToken() {
 }
 
 // ── Strategy 1: BrowserWindow + claude.ai JSON API (full data) ────────────────
-// claude.ai's /api/organizations/{id}/usage returns all rate-limit slots
-// including per-model (sonnet, design). Auth via stored session cookie.
+//
+// Key insight: the usage endpoint requires the org ID from the `lastActiveOrg`
+// cookie, NOT the org UUID from /api/bootstrap's memberships array (those are
+// different orgs). The session cookie authenticates the request.
 
 let fetcherWin   = null;
 let fetcherReady = false;
-let fetcherOrgId = null;
 let initPromise  = null;
 
 function parseFetchResult(data) {
   if (!data || !data.five_hour) return null;
-  // claude.ai returns utilization as 0–100 percentages already
+  // claude.ai returns utilization as 0–100 percentages
   const slot = s => s ? { pct: s.utilization ?? 0, resetsAt: s.resets_at ?? null } : null;
   return {
     source:           'api',
@@ -65,7 +67,6 @@ async function initFetcher() {
   if (fetcherWin && !fetcherWin.isDestroyed() && fetcherReady) return true;
   if (fetcherWin && !fetcherWin.isDestroyed()) fetcherWin.destroy();
   fetcherReady = false;
-  fetcherOrgId = null;
 
   fetcherWin = new BrowserWindow({
     show: false, width: 1, height: 1,
@@ -75,7 +76,6 @@ async function initFetcher() {
   fetcherWin.on('closed', () => {
     fetcherWin   = null;
     fetcherReady = false;
-    fetcherOrgId = null;
     initPromise  = null;
   });
 
@@ -98,28 +98,24 @@ async function fetchFromBrowserWindow() {
   if (!fetcherWin || fetcherWin.isDestroyed()) return null;
 
   try {
-    // Resolve org ID via /api/bootstrap — NO Bearer token, rely on stored sessionKey cookie
-    if (!fetcherOrgId) {
-      fetcherOrgId = await fetcherWin.webContents.executeJavaScript(`
-        (async () => {
-          try {
-            const r = await fetch('/api/bootstrap', { headers: { 'Accept': 'application/json' } });
-            if (!r.ok) return null;
-            const d = await r.json();
-            if (!d?.account) return null;
-            return d.account.memberships?.[0]?.organization?.uuid
-                ?? d.account.memberships?.[0]?.organization?.id
-                ?? d.organizations?.[0]?.uuid
-                ?? d.organizations?.[0]?.id
-                ?? null;
-          } catch { return null; }
-        })()
-      `);
-    }
-    if (!fetcherOrgId) return null;
+    // Read the lastActiveOrg cookie — this is the correct org ID for the usage endpoint.
+    // (The org UUID from /api/bootstrap memberships is a different org and returns 403.)
+    const cookies = await fetcherWin.webContents.executeJavaScript(`
+      (() => {
+        const c = {};
+        document.cookie.split(';').forEach(s => {
+          const [k, ...v] = s.trim().split('=');
+          if (k) c[k.trim()] = decodeURIComponent(v.join('='));
+        });
+        return c;
+      })()
+    `);
+
+    const orgId = cookies?.lastActiveOrg ?? null;
+    if (!orgId) return null;
 
     await fetcherWin.webContents.executeJavaScript(
-      `window.__oi = ${JSON.stringify(fetcherOrgId)};`
+      `window.__oi = ${JSON.stringify(orgId)};`
     );
 
     const data = await fetcherWin.webContents.executeJavaScript(`
@@ -135,14 +131,12 @@ async function fetchFromBrowserWindow() {
     `);
 
     return parseFetchResult(data);
-  } catch {
-    fetcherOrgId = null;
-    return null;
-  }
+  } catch { return null; }
 }
 
 // ── Strategy 2: Inference API headers (partial: 5h + 7d only) ────────────────
 // Works whenever the OAuth token is valid, regardless of browser session.
+// Headers are 0–1 fractions; convert to 0–100 to match the JSON API format.
 
 function parseRateLimitHeaders(headers) {
   const h = name => headers[name.toLowerCase()] ?? null;
@@ -152,7 +146,6 @@ function parseRateLimitHeaders(headers) {
   const sevenDReset = h('anthropic-ratelimit-unified-7d-reset');
   const overageSt   = h('anthropic-ratelimit-unified-overage-status');
   if (fiveHUtil == null && sevenDUtil == null) return null;
-  // Headers are 0–1 fractions; convert to 0–100 percentages to match the JSON API format
   const slot = (utilStr, resetStr) => utilStr == null ? null : {
     pct:      parseFloat(utilStr) * 100,
     resetsAt: resetStr ? new Date(parseInt(resetStr, 10) * 1000).toISOString() : null,
@@ -212,7 +205,6 @@ async function fetchFromInferenceHeaders() {
 let _pending = null;
 
 async function fetchUsage() {
-  // Serve from cache if still fresh
   try {
     const cached = JSON.parse(fs.readFileSync(CACHE_PATH, 'utf8'));
     if (Date.now() - new Date(cached.lastUpdated).getTime() <= CACHE_MAX_MS) return cached;
@@ -224,7 +216,6 @@ async function fetchUsage() {
 }
 
 async function _doFetch() {
-  // Try full data first (BrowserWindow + stored session cookie)
   let full = null;
   try { full = await fetchFromBrowserWindow(); } catch {}
   if (full) {
@@ -232,7 +223,6 @@ async function _doFetch() {
     return full;
   }
 
-  // Session expired or BrowserWindow unavailable — fall back to inference headers
   const partial = await fetchFromInferenceHeaders();
   if (partial) {
     try { fs.writeFileSync(CACHE_PATH, JSON.stringify(partial)); } catch {}
