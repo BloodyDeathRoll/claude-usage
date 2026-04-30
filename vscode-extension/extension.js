@@ -197,7 +197,7 @@ function startClaudeWatcher() {
 // ── Data ──────────────────────────────────────────────────────────────────────
 
 const CACHE_PATH = path.join(os.homedir(), '.claude-usage-cache.json');
-const CACHE_MAX_AGE_MS = 2 * 60 * 1000; // treat as fresh for up to 2 minutes
+const CACHE_MAX_AGE_MS = 10 * 60 * 1000; // use overlay's full data for up to 10 minutes
 
 function readCache() {
   try {
@@ -207,18 +207,27 @@ function readCache() {
   return null;
 }
 
+let lastApiResult = null;
+let lastApiTime   = 0;
+const API_MEM_CACHE_MS = 2 * 60 * 1000; // keep in-memory API result for 2 minutes
+
 async function refresh(manual) {
   const cfg = vscode.workspace.getConfiguration('claudeUsage');
 
-  // 1. Prefer the cache written by the overlay app — exact API data
+  // 1. Prefer the cache written by the overlay app — full per-model data
   const cached = readCache();
   if (cached) { render(cached); return; }
 
-  // 2. Direct OAuth fetch (works without a browser session)
-  const apiData = await fetchWithOAuth();
-  if (apiData) {
-    try { fs.writeFileSync(CACHE_PATH, JSON.stringify(apiData)); } catch {}
-    render(apiData);
+  // 2. Direct OAuth fetch (works without a browser session).
+  //    Result is kept in memory only — never written to disk so we don't
+  //    overwrite the overlay's richer cache with partial (no Sonnet/Design) data.
+  const now = Date.now();
+  if (manual || !lastApiResult || (now - lastApiTime) > API_MEM_CACHE_MS) {
+    lastApiResult = await fetchWithOAuth();
+    lastApiTime   = now;
+  }
+  if (lastApiResult) {
+    render(lastApiResult);
     return;
   }
 
