@@ -4,7 +4,7 @@ const fs   = require('fs');
 const os   = require('os');
 
 const { getUsage, CLAUDE_PROJECTS_DIR } = require('./src/usageParser');
-const { fetchUsage, showAuthWindow } = require('./src/claudeApi');
+const { fetchUsage, showAuthWindow, hasBrowserSession } = require('./src/claudeApi');
 
 const CONFIG_PATH      = path.join(os.homedir(), '.claude-overlay-config.json');
 const CACHE_PATH       = path.join(os.homedir(), '.claude-usage-cache.json');
@@ -109,6 +109,18 @@ function startPolling() {
   pollTimer = setInterval(pushUsage, POLL_INTERVAL_MS);
 }
 
+// On first launch (or after cookies expire), the hidden BrowserWindow has no
+// claude.ai session so we only get partial data (no Sonnet/Design rows).
+// Auto-show the login window once — after the user logs in, cookies persist
+// on disk so this never triggers again on subsequent launches.
+let _authChecked = false;
+async function checkAndAutoAuth() {
+  if (_authChecked) return;
+  _authChecked = true;
+  const has = await hasBrowserSession();
+  if (!has) showAuthWindow(() => pushUsage());
+}
+
 function startWatcher() {
   let chokidar;
   try { chokidar = require('chokidar'); } catch { return; }
@@ -160,6 +172,7 @@ if (!gotLock) {
     createTray();
     startWatcher();
     startPolling();
+    checkAndAutoAuth();
   });
 
   app.on('window-all-closed', (e) => e.preventDefault());

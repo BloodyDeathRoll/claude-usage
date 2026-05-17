@@ -230,6 +230,29 @@ async function _doFetch() {
   return partial;
 }
 
+// Returns true if the hidden BrowserWindow already has a valid claude.ai session
+// (lastActiveOrg cookie present). Initialises the BrowserWindow if not yet ready.
+async function hasBrowserSession() {
+  if (!fetcherWin || fetcherWin.isDestroyed()) {
+    if (!initPromise) initPromise = initFetcher().finally(() => { initPromise = null; });
+    await initPromise;
+  }
+  if (!fetcherWin || fetcherWin.isDestroyed()) return false;
+  try {
+    const cookies = await fetcherWin.webContents.executeJavaScript(`
+      (() => {
+        const c = {};
+        document.cookie.split(';').forEach(s => {
+          const [k, ...v] = s.trim().split('=');
+          if (k) c[k.trim()] = decodeURIComponent(v.join('='));
+        });
+        return c;
+      })()
+    `);
+    return !!cookies?.lastActiveOrg;
+  } catch { return false; }
+}
+
 // Opens the hidden BrowserWindow at a usable size so the user can log into
 // claude.ai once. After login is detected (lastActiveOrg cookie appears) the
 // window is hidden again and onLoggedIn() is called. Cookies persist on disk
@@ -269,4 +292,4 @@ async function showAuthWindow(onLoggedIn) {
   }, 2000);
 }
 
-module.exports = { fetchUsage, showAuthWindow };
+module.exports = { fetchUsage, showAuthWindow, hasBrowserSession };
