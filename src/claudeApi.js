@@ -2,8 +2,10 @@
 //
 //   1. Electron BrowserWindow → claude.ai JSON API (full data: all rows)
 //      Uses the sessionKey cookie stored in the Electron session.
-//      The org ID comes from the lastActiveOrg cookie (NOT the bootstrap
-//      memberships array, which returns a different org).
+//      The org ID comes from the lastActiveOrg cookie when available; falls
+//      back to probing /api/organizations on fresh installs or after the
+//      cookie expires. The winning org ID is cached as a session cookie so
+//      subsequent calls use the fast path.
 //
 //   2. Inference API headers → api.anthropic.com (partial: 5h + 7d only)
 //      Uses the Claude Code OAuth token with anthropic-beta: oauth-2025-04-20.
@@ -33,11 +35,12 @@ function readOAuthToken() {
 //
 // Org ID resolution (in order):
 //   1. lastActiveOrg cookie — fastest, set after the user has visited a workspace
-//   2. /api/organizations probe — enumerates all orgs and tries each usage endpoint
-//      until one returns data; works right after first login before any workspace visit
+//   2. /api/organizations probe — tries each org's usage endpoint until one
+//      returns data; works on fresh installs before lastActiveOrg is set.
+//      The winning org ID is written back as a persistent session cookie so
+//      subsequent calls skip the probe.
 //
 // Auth signal: sessionKey cookie (set immediately on login).
-// lastActiveOrg is NOT used as the auth signal — it may not be set yet.
 
 let fetcherWin   = null;
 let fetcherReady = false;
@@ -112,21 +115,62 @@ async function fetchFromBrowserWindow() {
 
   try {
     const allCookies = await getClaudeAiCookies();
-    const orgId = allCookies.find(c => c.name === 'lastActiveOrg')?.value ?? null;
-    if (!orgId) return null;
+    // sessionKey is required — without it we have no authenticated session at all
+    if (!allCookies.some(c => c.name === 'sessionKey')) return null;
 
-    await fetcherWin.webContents.executeJavaScript(`window.__oi = ${JSON.stringify(orgId)};`);
-    const data = await fetcherWin.webContents.executeJavaScript(`
+    const orgIdFromCookie = allCookies.find(c => c.name === 'lastActiveOrg')?.value ?? null;
+
+    // Single JS execution: try lastActiveOrg fast path first, then probe all orgs.
+    // Returns { data, usedOrgId } so we can persist the working org for future calls.
+    const result = await fetcherWin.webContents.executeJavaScript(`
       (async () => {
         try {
-          const r = await fetch('/api/organizations/' + window.__oi + '/usage',
+          const cookieOrgId = ${JSON.stringify(orgIdFromCookie)};
+          if (cookieOrgId) {
+            const r = await fetch('/api/organizations/' + cookieOrgId + '/usage',
+              { headers: { 'Accept': 'application/json' } });
+            if (r.ok) {
+              const d = await r.json();
+              if (d && d.five_hour) return { data: d, usedOrgId: cookieOrgId };
+            }
+          }
+          // Probe: enumerate all orgs and try each usage endpoint
+          const orgsR = await fetch('/api/organizations',
             { headers: { 'Accept': 'application/json' } });
-          if (!r.ok) return null;
-          return await r.json();
+          if (!orgsR.ok) return null;
+          const body = await orgsR.json();
+          const list = Array.isArray(body) ? body
+            : (Array.isArray(body && body.data) ? body.data : []);
+          for (const org of list) {
+            const id = org.uuid || org.id;
+            if (!id) continue;
+            const r = await fetch('/api/organizations/' + id + '/usage',
+              { headers: { 'Accept': 'application/json' } });
+            if (r.ok) {
+              const d = await r.json();
+              if (d && d.five_hour) return { data: d, usedOrgId: id };
+            }
+          }
+          return null;
         } catch { return null; }
       })()
     `);
-    return parseFetchResult(data);
+
+    if (!result) return null;
+
+    // Persist the winning org ID so future calls skip the probe
+    if (result.usedOrgId && result.usedOrgId !== orgIdFromCookie) {
+      try {
+        await fetcherWin.webContents.session.cookies.set({
+          url:            'https://claude.ai',
+          name:           'lastActiveOrg',
+          value:          result.usedOrgId,
+          expirationDate: Math.floor(Date.now() / 1000) + 30 * 24 * 60 * 60,
+        });
+      } catch {}
+    }
+
+    return parseFetchResult(result.data);
   } catch { return null; }
 }
 
@@ -226,8 +270,8 @@ async function _doFetch() {
   return partial;
 }
 
-// Returns true only when both sessionKey AND lastActiveOrg are present —
-// the minimum needed for fetchFromBrowserWindow to succeed.
+// Returns true when sessionKey is present — sufficient for fetchFromBrowserWindow
+// to succeed (org ID is discovered via probe if lastActiveOrg is absent).
 async function hasBrowserSession() {
   if (!fetcherWin || fetcherWin.isDestroyed()) {
     if (!initPromise) initPromise = initFetcher().finally(() => { initPromise = null; });
@@ -235,13 +279,10 @@ async function hasBrowserSession() {
   }
   if (!fetcherWin || fetcherWin.isDestroyed()) return false;
   const cookies = await getClaudeAiCookies();
-  const names = new Set(cookies.map(c => c.name));
-  return names.has('sessionKey') && names.has('lastActiveOrg');
+  return cookies.some(c => c.name === 'sessionKey');
 }
 
-// Navigate to /new in the BrowserWindow and wait for the page to finish
-// loading, then resolve. /new forces the claude.ai app to load with full
-// org context which sets the lastActiveOrg cookie.
+// Navigate to url in the BrowserWindow and wait for the page to finish loading.
 function navigateAndWait(url) {
   return new Promise((resolve) => {
     const timeout = setTimeout(resolve, 15000);
@@ -251,7 +292,9 @@ function navigateAndWait(url) {
 }
 
 // Shows the claude.ai login page. Once the user logs in (sessionKey appears),
-// navigates to /new to force lastActiveOrg to be set, then hides the window.
+// navigates to /new to help the React app set lastActiveOrg, then waits up to
+// 10 more seconds for it to appear before completing. Auth completes regardless —
+// fetchFromBrowserWindow probes /api/organizations if lastActiveOrg is still absent.
 async function showAuthWindow(onLoggedIn) {
   if (!fetcherWin || fetcherWin.isDestroyed()) {
     if (!initPromise) initPromise = initFetcher().finally(() => { initPromise = null; });
@@ -265,26 +308,40 @@ async function showAuthWindow(onLoggedIn) {
   fetcherWin.loadURL('https://claude.ai');
   fetcherWin.show();
 
-  let navigatedToNew = false;
+  // done flag prevents re-entrant poll ticks during async navigation
+  let done = false;
 
   const poll = setInterval(async () => {
     if (!fetcherWin || fetcherWin.isDestroyed()) { clearInterval(poll); return; }
+    if (done) return;
+
     const cookies = await getClaudeAiCookies();
     const names = new Set(cookies.map(c => c.name));
 
     if (names.has('lastActiveOrg')) {
-      // Full success — have everything we need
+      // Best case: org context already established by the React app
+      done = true;
       clearInterval(poll);
       fetcherWin.setAlwaysOnTop(false);
       fetcherWin.hide();
       fetcherReady = true;
       if (onLoggedIn) onLoggedIn();
-    } else if (names.has('sessionKey') && !navigatedToNew) {
-      // Logged in but org context not loaded yet — navigate to /new which
-      // forces the React app to initialise with org context and set lastActiveOrg
-      navigatedToNew = true;
+    } else if (names.has('sessionKey')) {
+      // Logged in — navigate to /new so the React app boots with full org context
+      done = true;
+      clearInterval(poll);
       await navigateAndWait('https://claude.ai/new');
-      // Poll will pick up lastActiveOrg on the next tick
+      // did-finish-load fires before React sets cookies; wait up to 10 more seconds
+      for (let i = 0; i < 10; i++) {
+        await new Promise(r => setTimeout(r, 1000));
+        const c2 = await getClaudeAiCookies();
+        if (c2.some(c => c.name === 'lastActiveOrg')) break;
+      }
+      // Complete auth regardless — fetchFromBrowserWindow handles org discovery
+      fetcherWin.setAlwaysOnTop(false);
+      fetcherWin.hide();
+      fetcherReady = true;
+      if (onLoggedIn) onLoggedIn();
     }
   }, 2000);
 }
