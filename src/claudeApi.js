@@ -89,6 +89,15 @@ async function initFetcher() {
   return true;
 }
 
+// Read cookies from the Electron session directly — works for httpOnly cookies
+// too, unlike document.cookie which only returns JS-accessible cookies.
+async function getClaudeAiCookies() {
+  if (!fetcherWin || fetcherWin.isDestroyed()) return [];
+  try {
+    return await fetcherWin.webContents.session.cookies.get({ url: 'https://claude.ai' });
+  } catch { return []; }
+}
+
 async function fetchFromBrowserWindow() {
   if (!fetcherReady || !fetcherWin || fetcherWin.isDestroyed()) {
     if (!initPromise) initPromise = initFetcher().finally(() => { initPromise = null; });
@@ -98,20 +107,8 @@ async function fetchFromBrowserWindow() {
   if (!fetcherWin || fetcherWin.isDestroyed()) return null;
 
   try {
-    // Read the lastActiveOrg cookie — this is the correct org ID for the usage endpoint.
-    // (The org UUID from /api/bootstrap memberships is a different org and returns 403.)
-    const cookies = await fetcherWin.webContents.executeJavaScript(`
-      (() => {
-        const c = {};
-        document.cookie.split(';').forEach(s => {
-          const [k, ...v] = s.trim().split('=');
-          if (k) c[k.trim()] = decodeURIComponent(v.join('='));
-        });
-        return c;
-      })()
-    `);
-
-    const orgId = cookies?.lastActiveOrg ?? null;
+    const allCookies = await getClaudeAiCookies();
+    const orgId = allCookies.find(c => c.name === 'lastActiveOrg')?.value ?? null;
     if (!orgId) return null;
 
     await fetcherWin.webContents.executeJavaScript(
@@ -238,19 +235,8 @@ async function hasBrowserSession() {
     await initPromise;
   }
   if (!fetcherWin || fetcherWin.isDestroyed()) return false;
-  try {
-    const cookies = await fetcherWin.webContents.executeJavaScript(`
-      (() => {
-        const c = {};
-        document.cookie.split(';').forEach(s => {
-          const [k, ...v] = s.trim().split('=');
-          if (k) c[k.trim()] = decodeURIComponent(v.join('='));
-        });
-        return c;
-      })()
-    `);
-    return !!cookies?.lastActiveOrg;
-  } catch { return false; }
+  const cookies = await getClaudeAiCookies();
+  return cookies.some(c => c.name === 'lastActiveOrg');
 }
 
 // Opens the hidden BrowserWindow at a usable size so the user can log into
@@ -266,29 +252,25 @@ async function showAuthWindow(onLoggedIn) {
 
   fetcherWin.setSize(1000, 700);
   fetcherWin.center();
+  fetcherWin.setAlwaysOnTop(true);
   fetcherWin.loadURL('https://claude.ai');
   fetcherWin.show();
 
   const poll = setInterval(async () => {
     if (!fetcherWin || fetcherWin.isDestroyed()) { clearInterval(poll); return; }
-    try {
-      const cookies = await fetcherWin.webContents.executeJavaScript(`
-        (() => {
-          const c = {};
-          document.cookie.split(';').forEach(s => {
-            const [k, ...v] = s.trim().split('=');
-            if (k) c[k.trim()] = decodeURIComponent(v.join('='));
-          });
-          return c;
-        })()
-      `);
-      if (cookies?.lastActiveOrg) {
-        clearInterval(poll);
-        fetcherWin.hide();
-        fetcherReady = true;
-        if (onLoggedIn) onLoggedIn();
-      }
-    } catch {}
+    const cookies = await getClaudeAiCookies();
+    const byName = Object.fromEntries(cookies.map(c => [c.name, c.value]));
+
+    if (byName.lastActiveOrg) {
+      clearInterval(poll);
+      fetcherWin.setAlwaysOnTop(false);
+      fetcherWin.hide();
+      fetcherReady = true;
+      if (onLoggedIn) onLoggedIn();
+    } else if (byName.sessionKey) {
+      // Logged in but lastActiveOrg not set yet — navigate to main page to trigger it
+      try { await fetcherWin.webContents.executeJavaScript(`window.location.href='https://claude.ai'`); } catch {}
+    }
   }, 2000);
 }
 
