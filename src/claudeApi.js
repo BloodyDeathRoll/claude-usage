@@ -230,4 +230,43 @@ async function _doFetch() {
   return partial;
 }
 
-module.exports = { fetchUsage };
+// Opens the hidden BrowserWindow at a usable size so the user can log into
+// claude.ai once. After login is detected (lastActiveOrg cookie appears) the
+// window is hidden again and onLoggedIn() is called. Cookies persist on disk
+// so all subsequent fetchFromBrowserWindow calls work without re-auth.
+async function showAuthWindow(onLoggedIn) {
+  if (!fetcherWin || fetcherWin.isDestroyed()) {
+    if (!initPromise) initPromise = initFetcher().finally(() => { initPromise = null; });
+    await initPromise;
+  }
+  if (!fetcherWin || fetcherWin.isDestroyed()) return;
+
+  fetcherWin.setSize(1000, 700);
+  fetcherWin.center();
+  fetcherWin.loadURL('https://claude.ai');
+  fetcherWin.show();
+
+  const poll = setInterval(async () => {
+    if (!fetcherWin || fetcherWin.isDestroyed()) { clearInterval(poll); return; }
+    try {
+      const cookies = await fetcherWin.webContents.executeJavaScript(`
+        (() => {
+          const c = {};
+          document.cookie.split(';').forEach(s => {
+            const [k, ...v] = s.trim().split('=');
+            if (k) c[k.trim()] = decodeURIComponent(v.join('='));
+          });
+          return c;
+        })()
+      `);
+      if (cookies?.lastActiveOrg) {
+        clearInterval(poll);
+        fetcherWin.hide();
+        fetcherReady = true;
+        if (onLoggedIn) onLoggedIn();
+      }
+    } catch {}
+  }, 2000);
+}
+
+module.exports = { fetchUsage, showAuthWindow };

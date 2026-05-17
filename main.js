@@ -4,7 +4,7 @@ const fs   = require('fs');
 const os   = require('os');
 
 const { getUsage, CLAUDE_PROJECTS_DIR } = require('./src/usageParser');
-const { fetchUsage } = require('./src/claudeApi');
+const { fetchUsage, showAuthWindow } = require('./src/claudeApi');
 
 const CONFIG_PATH      = path.join(os.homedir(), '.claude-overlay-config.json');
 const CACHE_PATH       = path.join(os.homedir(), '.claude-usage-cache.json');
@@ -83,9 +83,10 @@ function createTray() {
   tray = new Tray(buildTrayIcon());
   tray.setToolTip('Claude Usage Overlay');
   tray.setContextMenu(Menu.buildFromTemplate([
-    { label: 'Show',      click: () => { win.show(); win.focus(); } },
+    { label: 'Show',                 click: () => { win.show(); win.focus(); } },
+    { label: 'Connect to claude.ai', click: () => showAuthWindow(() => pushUsage()) },
     { type: 'separator' },
-    { label: 'Quit',      click: () => app.exit(0) },
+    { label: 'Quit',                 click: () => app.exit(0) },
   ]));
   tray.on('click', () => { win.show(); win.focus(); });
 }

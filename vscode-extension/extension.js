@@ -142,6 +142,7 @@ function launchElectron(overlayDir, electronBin) {
     stdio: ['ignore', 'pipe', 'pipe'],
     cwd: overlayDir,
     shell: electronBin.shell,
+    windowsHide: true,
     env: childEnv,
   });
   const logPath = path.join(os.tmpdir(), 'claude-usage-overlay.log');
@@ -252,6 +253,38 @@ function activate(context) {
   refresh(false);
   timer = setInterval(() => refresh(false), POLL_MS);
   startClaudeWatcher();
+  setupOverlayIfNeeded(); // fire-and-forget: installs npm deps on first run
+}
+
+async function setupOverlayIfNeeded() {
+  const overlayDir = getOverlayDir();
+  if (!fs.existsSync(path.join(overlayDir, 'main.js'))) return; // repo not cloned
+  if (getElectronBin(overlayDir)) return;                        // already installed
+
+  const installed = await vscode.window.withProgress({
+    location: vscode.ProgressLocation.Notification,
+    title: 'Claude Usage: Installing overlay dependencies…',
+    cancellable: false,
+  }, async () => {
+    try {
+      await runNpmInstall(overlayDir);
+      return true;
+    } catch (err) {
+      vscode.window.showErrorMessage(
+        `Claude Usage: npm install failed — is Python 3 installed? (${err.message.split('\n')[0]})`,
+        'Open python.org'
+      ).then(choice => {
+        if (choice === 'Open python.org') {
+          vscode.env.openExternal(vscode.Uri.parse('https://www.python.org/downloads/'));
+        }
+      });
+      return false;
+    }
+  });
+
+  if (installed) {
+    vscode.window.showInformationMessage('Claude Usage: overlay ready. Click the status bar to launch it.');
+  }
 }
 
 // Watch ~/.claude/projects/ for JSONL writes so we refresh the moment a
