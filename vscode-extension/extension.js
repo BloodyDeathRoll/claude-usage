@@ -85,25 +85,62 @@ async function fetchWithOAuth() {
 function getOverlayDir() {
   const cfg = vscode.workspace.getConfiguration('claudeUsage').get('overlayPath');
   if (cfg) return cfg;
-  for (const candidate of ['claude-usage', 'usage']) {
-    const p = path.join(os.homedir(), 'Projects', candidate);
+
+  const home = os.homedir();
+  const candidates = [
+    // Linux / macOS
+    path.join(home, 'Projects', 'claude-usage'),
+    path.join(home, 'Projects', 'usage'),
+    path.join(home, 'Documents', 'Projects', 'claude-usage'),
+    // Windows standard Documents location
+    path.join(home, 'Documents', 'Projects', 'claude-usage'),
+    // Windows OneDrive-redirected Documents (default on Windows 11)
+    path.join(home, 'OneDrive', 'Documents', 'Projects', 'claude-usage'),
+    path.join(home, 'OneDrive', 'Documents', 'Projects', 'usage'),
+    path.join(home, 'OneDrive', 'Projects', 'claude-usage'),
+  ];
+
+  for (const p of candidates) {
     if (fs.existsSync(path.join(p, 'main.js'))) return p;
   }
-  return path.join(os.homedir(), 'Projects', 'claude-usage');
+  return null;
 }
 
 function openOverlay() {
-  const OVERLAY_DIR      = getOverlayDir();
-  const OVERLAY_ELECTRON = path.join(OVERLAY_DIR, 'node_modules', '.bin', 'electron');
-  if (!fs.existsSync(OVERLAY_ELECTRON)) {
-    vscode.window.showWarningMessage(`Claude Usage overlay not found at ${OVERLAY_DIR}.`);
+  const OVERLAY_DIR = getOverlayDir();
+  if (!OVERLAY_DIR) {
+    vscode.window.showWarningMessage(
+      'Claude Usage: overlay repo not found. Set "claudeUsage.overlayPath" in VS Code settings to the folder containing main.js.',
+      'Open Settings'
+    ).then(sel => {
+      if (sel === 'Open Settings')
+        vscode.commands.executeCommand('workbench.action.openSettings', 'claudeUsage.overlayPath');
+    });
     return;
   }
+
+  // On Windows, npm creates electron.cmd; Unix gets a plain `electron` shim.
+  const binName = process.platform === 'win32' ? 'electron.cmd' : 'electron';
+  const OVERLAY_ELECTRON = path.join(OVERLAY_DIR, 'node_modules', '.bin', binName);
+
+  if (!fs.existsSync(OVERLAY_ELECTRON)) {
+    vscode.window.showWarningMessage(
+      `Claude Usage: Electron not installed in ${OVERLAY_DIR}. Run "npm install" there first.`,
+      'Copy Command'
+    ).then(sel => {
+      if (sel === 'Copy Command')
+        vscode.env.clipboard.writeText(`cd "${OVERLAY_DIR}" && npm install`);
+    });
+    return;
+  }
+
   const childEnv = { ...process.env };
   delete childEnv.ELECTRON_RUN_AS_NODE;
   delete childEnv.ELECTRON_NO_ATTACH_CONSOLE;
   const child = spawn(OVERLAY_ELECTRON, [OVERLAY_DIR], {
     detached: true,
+    // .cmd files on Windows require a shell to execute
+    shell: process.platform === 'win32',
     stdio: ['ignore', 'pipe', 'pipe'],
     cwd: OVERLAY_DIR,
     env: childEnv,

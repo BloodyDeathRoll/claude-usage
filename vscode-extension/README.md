@@ -78,6 +78,19 @@ The OAuth token is missing or expired. Common causes:
 
 Either ensure Claude Code's OAuth token is present (see above), or set `claudeUsage.sessionLimitTokens` in VS Code settings to match your plan.
 
+**"Overlay not found" warning when clicking the status bar**
+
+The extension auto-searches common locations. If your repo is elsewhere, set `claudeUsage.overlayPath` in VS Code settings (`Ctrl+,` → search "Claude Usage") to the full path of the folder containing `main.js`. The warning dialog has an **Open Settings** button that takes you there directly.
+
+| Platform | Paths checked automatically |
+|----------|---------------------------|
+| Linux / macOS | `~/Projects/claude-usage`, `~/Projects/usage`, `~/Documents/Projects/claude-usage` |
+| Windows | `~\Documents\Projects\claude-usage`, `~\OneDrive\Documents\Projects\claude-usage`, `~\OneDrive\Projects\claude-usage` |
+
+**"Electron not installed" warning**
+
+The overlay repo was found but `npm install` hasn't been run inside it. The warning dialog has a **Copy Command** button that puts the right command on your clipboard.
+
 ---
 
 ## Source & feedback

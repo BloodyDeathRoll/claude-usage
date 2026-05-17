@@ -25,19 +25,20 @@ They share the same data. When the Electron overlay is running, the VS Code exte
 
 #### Option A — Install from `.vsix` (recommended)
 
-1. Download `claude-usage-0.1.5.vsix` from the [latest release](https://github.com/BloodyDeathRoll/claude-usage/releases/latest).
+1. Download `claude-usage-0.1.6.vsix` from the [latest release](https://github.com/BloodyDeathRoll/claude-usage/releases/latest).
 
 2. Install it:
 
    **Linux / macOS** — terminal:
    ```bash
-   code --install-extension claude-usage-0.1.5.vsix
+   code --install-extension claude-usage-0.1.6.vsix
    ```
 
-   **Windows** — PowerShell:
+   **Windows** — PowerShell (use `code.cmd`, not `Code.exe`):
    ```powershell
-   code --install-extension claude-usage-0.1.5.vsix
+   & "$env:LOCALAPPDATA\Programs\Microsoft VS Code\bin\code.cmd" --install-extension claude-usage-0.1.6.vsix
    ```
+   Or use the UI method below — it works on all platforms without any CLI quirks.
 
    **Or via VS Code UI** (all platforms):
    - Open the Extensions panel (`Ctrl+Shift+X` / `Cmd+Shift+X`)
@@ -53,8 +54,8 @@ They share the same data. When the Electron overlay is running, the VS Code exte
 git clone https://github.com/BloodyDeathRoll/claude-usage.git
 cd claude-usage/vscode-extension
 npm install
-npx vsce package           # produces claude-usage-0.1.5.vsix
-code --install-extension claude-usage-0.1.5.vsix
+npx vsce package           # produces claude-usage-0.1.6.vsix
+code --install-extension claude-usage-0.1.6.vsix
 ```
 
 > **Not on the VS Code Marketplace yet.** The extension is distributed via `.vsix` only. It will not appear in the Extensions search on machines where it has not been manually installed. To install on another PC, download the `.vsix` from the [latest release](https://github.com/BloodyDeathRoll/claude-usage/releases/latest) and follow Option A above.
@@ -114,8 +115,9 @@ Open VS Code settings (`Ctrl+,`) and search for **Claude Usage**. These settings
 | `claudeUsage.sessionLimitTokens` | `null` | Session token limit for your plan. Pro=320000, Max5=1600000, Max20=6400000 |
 | `claudeUsage.weeklyLimitTokens` | `null` | Weekly token limit for your plan |
 | `claudeUsage.weeklyModelLimits` | `null` | Per-model weekly limits, e.g. `{"sonnet": 436000, "haiku": 25000}` |
+| `claudeUsage.overlayPath` | `null` | Absolute path to the overlay repo (folder containing `main.js`). Set when the repo is in a non-standard location, e.g. `C:\Users\you\OneDrive\Documents\Projects\claude-usage` |
 
-Leave these `null` to show raw token counts instead of percentages in the fallback case.
+The token limit settings affect the local JSONL fallback only. `claudeUsage.overlayPath` is needed only if the extension can't find the overlay automatically (see Troubleshooting below).
 
 ---
 
@@ -261,6 +263,26 @@ The OAuth token is missing or expired. Common causes:
 The extension fell back to local JSONL and no plan limits are configured. Either:
 - Ensure Claude Code's OAuth token exists (see above), or
 - Set `claudeUsage.sessionLimitTokens` in VS Code settings to match your plan.
+
+**"Overlay not found" warning when clicking the status bar**
+
+The extension searches these locations automatically:
+
+| Platform | Paths checked |
+|----------|--------------|
+| Linux / macOS | `~/Projects/claude-usage`, `~/Projects/usage`, `~/Documents/Projects/claude-usage` |
+| Windows | `~\Documents\Projects\claude-usage`, `~\OneDrive\Documents\Projects\claude-usage`, `~\OneDrive\Projects\claude-usage` |
+
+If your repo is elsewhere, set `claudeUsage.overlayPath` in VS Code settings (`Ctrl+,` → search "Claude Usage") to the full path of the folder containing `main.js`. The warning dialog also has an **Open Settings** button that takes you there directly.
+
+**"Electron not installed" warning**
+
+The overlay repo was found but `npm install` hasn't been run inside it yet. Run:
+```bash
+cd /path/to/claude-usage
+npm install
+```
+On Windows the warning dialog has a **Copy Command** button that puts the right `cd && npm install` on your clipboard.
 
 ---
 
