@@ -1,9 +1,9 @@
 {
-  "name": "claude-usage",
-  "displayName": "Claude Usage",
+  "name": "tracker-claude-usage",
+  "displayName": "Tracker Claude Usage",
   "description": "Real-time Claude Code session and weekly token usage in the status bar. Shows live data from overlay cache with local JSONL fallback.",
-  "version": "0.2.0",
-  "publisher": "shahar",
+  "version": "0.3.0",
+  "publisher": "EinHanamer",
   "license": "MIT",
   "repository": {
     "type": "git",

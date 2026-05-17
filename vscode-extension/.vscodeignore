@@ -1,7 +1,8 @@
 .vscode/**
 .vscodeignore
-node_modules/.bin
-node_modules/**/test
-node_modules/**/*.md
-node_modules/**/*.ts
+.claude/**
+node_modules/**
+package-lock.json
+*.vsix
+claude-usage-*/
 **/*.map
