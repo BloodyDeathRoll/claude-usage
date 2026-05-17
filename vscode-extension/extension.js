@@ -6,10 +6,10 @@ const https  = require('https');
 const { spawn } = require('child_process');
 const { getUsage } = require('./src/usageParser');
 
-// ── OAuth direct fetch via inference API headers ──────────────────────────────
-// api.anthropic.com/v1/messages accepts the Claude Code OAuth token with the
-// oauth-2025-04-20 beta header. Rate-limit utilization comes back in the
-// response headers — no browser session or Cloudflare bypass needed.
+// ── OAuth direct fetch — full data from claude.ai, no browser needed ─────────
+// Uses the Claude Code OAuth bearer token to call claude.ai's usage API
+// directly. Returns full per-model data (sonnetOnly, claudeDesign) when
+// claude.ai accepts the token. Falls back to inference headers if it doesn't.
 
 const CLAUDE_CREDS_PATH = path.join(os.homedir(), '.claude', '.credentials.json');
 
@@ -20,6 +20,68 @@ function readOAuthToken() {
     if (oauth.expiresAt && Date.now() > oauth.expiresAt) return null;
     return oauth.accessToken;
   } catch { return null; }
+}
+
+function httpsGetJson(hostname, urlPath, reqHeaders) {
+  return new Promise((resolve) => {
+    const req = https.request({
+      hostname, path: urlPath, method: 'GET',
+      headers: reqHeaders, timeout: 10000,
+    }, (res) => {
+      let raw = '';
+      res.on('data', d => { raw += d; });
+      res.on('end', () => {
+        try { resolve(res.statusCode === 200 ? JSON.parse(raw) : null); }
+        catch { resolve(null); }
+      });
+    });
+    req.on('error',   () => resolve(null));
+    req.on('timeout', () => { req.destroy(); resolve(null); });
+    req.end();
+  });
+}
+
+function parseClaudeAiUsage(data) {
+  if (!data || !data.five_hour) return null;
+  const slot = s => s ? { pct: s.utilization ?? 0, resetsAt: s.resets_at ?? null } : null;
+  return {
+    source:       'api',
+    session:      slot(data.five_hour),
+    allModels:    slot(data.seven_day),
+    sonnetOnly:   slot(data.seven_day_sonnet),
+    claudeDesign: slot(data.seven_day_cowork) ?? slot(data.seven_day_omelette),
+    extraUsage: data.extra_usage ? {
+      enabled:      data.extra_usage.is_enabled,
+      usedCredits:  data.extra_usage.used_credits,
+      monthlyLimit: data.extra_usage.monthly_limit,
+      pct:          data.extra_usage.utilization ?? null,
+      currency:     data.extra_usage.currency,
+    } : null,
+    lastUpdated: new Date(),
+  };
+}
+
+async function fetchWithOAuthFull() {
+  const token = readOAuthToken();
+  if (!token) return null;
+  const hdrs = {
+    'Authorization':  `Bearer ${token}`,
+    'Accept':         'application/json',
+    'anthropic-beta': 'oauth-2025-04-20',
+  };
+  try {
+    const orgs = await httpsGetJson('claude.ai', '/api/organizations', hdrs);
+    const list = Array.isArray(orgs) ? orgs
+      : (Array.isArray(orgs?.data) ? orgs.data : []);
+    for (const org of list) {
+      const id = org.uuid || org.id;
+      if (!id) continue;
+      const data = await httpsGetJson('claude.ai', `/api/organizations/${id}/usage`, hdrs);
+      const result = parseClaudeAiUsage(data);
+      if (result) return result;
+    }
+  } catch {}
+  return null;
 }
 
 function parseRateLimitHeaders(headers) {
@@ -330,12 +392,12 @@ async function refresh(manual) {
   const cached = readCache();
   if (cached) { render(cached); return; }
 
-  // 2. Direct OAuth fetch (works without a browser session).
-  //    Result is kept in memory only — never written to disk so we don't
-  //    overwrite the overlay's richer cache with partial (no Sonnet/Design) data.
+  // 2. OAuth direct to claude.ai (full data) then inference headers (partial).
+  //    Results kept in memory only — never written to disk so we don't
+  //    overwrite the overlay's richer cache with partial data.
   const now = Date.now();
   if (manual || !lastApiResult || (now - lastApiTime) > API_MEM_CACHE_MS) {
-    lastApiResult = await fetchWithOAuth();
+    lastApiResult = await fetchWithOAuthFull() ?? await fetchWithOAuth();
     lastApiTime   = now;
   }
   if (lastApiResult) {

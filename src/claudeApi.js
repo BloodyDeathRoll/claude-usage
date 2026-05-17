@@ -31,6 +31,53 @@ function readOAuthToken() {
   } catch { return null; }
 }
 
+// ── Strategy 0: OAuth token → claude.ai API direct (full data, no browser) ──
+// Uses the same usage endpoint as Strategy 1 but authenticates via the Claude
+// Code OAuth bearer token instead of the BrowserWindow session cookies.
+// No login window required. Falls through if Cloudflare or auth rejects it.
+
+function httpsGetJson(hostname, urlPath, reqHeaders) {
+  return new Promise((resolve) => {
+    const req = https.request({
+      hostname, path: urlPath, method: 'GET',
+      headers: reqHeaders, timeout: 10000,
+    }, (res) => {
+      let raw = '';
+      res.on('data', d => { raw += d; });
+      res.on('end', () => {
+        try { resolve(res.statusCode === 200 ? JSON.parse(raw) : null); }
+        catch { resolve(null); }
+      });
+    });
+    req.on('error',   () => resolve(null));
+    req.on('timeout', () => { req.destroy(); resolve(null); });
+    req.end();
+  });
+}
+
+async function fetchWithOAuthDirect() {
+  const token = readOAuthToken();
+  if (!token) return null;
+  const hdrs = {
+    'Authorization':  `Bearer ${token}`,
+    'Accept':         'application/json',
+    'anthropic-beta': 'oauth-2025-04-20',
+  };
+  try {
+    const orgs = await httpsGetJson('claude.ai', '/api/organizations', hdrs);
+    const list = Array.isArray(orgs) ? orgs
+      : (Array.isArray(orgs?.data) ? orgs.data : []);
+    for (const org of list) {
+      const id = org.uuid || org.id;
+      if (!id) continue;
+      const data = await httpsGetJson('claude.ai', `/api/organizations/${id}/usage`, hdrs);
+      const result = parseFetchResult(data);
+      if (result) return result;
+    }
+  } catch {}
+  return null;
+}
+
 // ── Strategy 1: BrowserWindow + claude.ai JSON API (full data) ────────────────
 //
 // Org ID resolution (in order):
@@ -256,6 +303,14 @@ async function fetchUsage() {
 }
 
 async function _doFetch() {
+  // Strategy 0: OAuth-direct — full data, no browser session needed
+  const oauthFull = await fetchWithOAuthDirect();
+  if (oauthFull) {
+    try { fs.writeFileSync(CACHE_PATH, JSON.stringify(oauthFull)); } catch {}
+    return oauthFull;
+  }
+
+  // Strategy 1: BrowserWindow session
   let full = null;
   try { full = await fetchFromBrowserWindow(); } catch {}
   if (full) {
@@ -263,6 +318,7 @@ async function _doFetch() {
     return full;
   }
 
+  // Strategy 2: Inference headers (partial data only)
   const partial = await fetchFromInferenceHeaders();
   if (partial) {
     try { fs.writeFileSync(CACHE_PATH, JSON.stringify(partial)); } catch {}
@@ -350,4 +406,4 @@ function clearCache() {
   try { fs.unlinkSync(CACHE_PATH); } catch {}
 }
 
-module.exports = { fetchUsage, showAuthWindow, hasBrowserSession, clearCache };
+module.exports = { fetchUsage, fetchWithOAuthDirect, showAuthWindow, hasBrowserSession, clearCache };
