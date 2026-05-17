@@ -114,32 +114,33 @@ function getElectronBin(overlayDir) {
   return fs.existsSync(bin) ? { bin, shell: false } : null;
 }
 
-function openOverlay() {
-  const OVERLAY_DIR = getOverlayDir();
-  const electronBin = getElectronBin(OVERLAY_DIR);
-
-  if (!electronBin) {
+function runNpmInstall(overlayDir) {
+  return new Promise((resolve, reject) => {
     const npmCmd = process.platform === 'win32' ? 'npm.cmd' : 'npm';
-    vscode.window.showWarningMessage(
-      `Claude Usage: Electron overlay not installed at ${OVERLAY_DIR}.\n` +
-      `Python 3 is required. Install it from https://python.org, then run:\n` +
-      `  cd "${OVERLAY_DIR}" && ${npmCmd} install`,
-      'Open python.org'
-    ).then(choice => {
-      if (choice === 'Open python.org') {
-        vscode.env.openExternal(vscode.Uri.parse('https://www.python.org/downloads/'));
-      }
+    const proc = spawn(npmCmd, ['install'], {
+      cwd: overlayDir,
+      shell: process.platform === 'win32',
+      stdio: ['ignore', 'pipe', 'pipe'],
     });
-    return;
-  }
+    let output = '';
+    proc.stdout.on('data', d => { output += d.toString(); });
+    proc.stderr.on('data', d => { output += d.toString(); });
+    proc.on('error', err => reject(new Error(`${err.message}\n${output}`)));
+    proc.on('exit', code => {
+      if (code === 0) resolve();
+      else reject(new Error(output || `npm install exited with code ${code}`));
+    });
+  });
+}
 
+function launchElectron(overlayDir, electronBin) {
   const childEnv = { ...process.env };
   delete childEnv.ELECTRON_RUN_AS_NODE;
   delete childEnv.ELECTRON_NO_ATTACH_CONSOLE;
-  const child = spawn(electronBin.bin, [OVERLAY_DIR], {
+  const child = spawn(electronBin.bin, [overlayDir], {
     detached: true,
     stdio: ['ignore', 'pipe', 'pipe'],
-    cwd: OVERLAY_DIR,
+    cwd: overlayDir,
     shell: electronBin.shell,
     env: childEnv,
   });
@@ -160,6 +161,57 @@ function openOverlay() {
     }
   });
   child.unref();
+}
+
+async function openOverlay() {
+  const OVERLAY_DIR = getOverlayDir();
+
+  if (!fs.existsSync(path.join(OVERLAY_DIR, 'main.js'))) {
+    vscode.window.showWarningMessage(
+      `Claude Usage: overlay repo not found. Clone https://github.com/BloodyDeathRoll/claude-usage to one of: ` +
+      `~/Projects/claude-usage, ~/Documents/Projects/claude-usage, ~/OneDrive/Documents/Projects/claude-usage`,
+      'Open GitHub'
+    ).then(choice => {
+      if (choice === 'Open GitHub') {
+        vscode.env.openExternal(vscode.Uri.parse('https://github.com/BloodyDeathRoll/claude-usage'));
+      }
+    });
+    return;
+  }
+
+  let electronBin = getElectronBin(OVERLAY_DIR);
+
+  if (!electronBin) {
+    const installed = await vscode.window.withProgress({
+      location: vscode.ProgressLocation.Notification,
+      title: 'Claude Usage: Installing overlay dependencies…',
+      cancellable: false,
+    }, async () => {
+      try {
+        await runNpmInstall(OVERLAY_DIR);
+        return true;
+      } catch (err) {
+        vscode.window.showErrorMessage(
+          `Claude Usage: npm install failed. Make sure Python 3 is installed. Error: ${err.message.split('\n')[0]}`,
+          'Open python.org'
+        ).then(choice => {
+          if (choice === 'Open python.org') {
+            vscode.env.openExternal(vscode.Uri.parse('https://www.python.org/downloads/'));
+          }
+        });
+        return false;
+      }
+    });
+
+    if (!installed) return;
+    electronBin = getElectronBin(OVERLAY_DIR);
+    if (!electronBin) {
+      vscode.window.showErrorMessage('Claude Usage: npm install completed but electron binary not found.');
+      return;
+    }
+  }
+
+  launchElectron(OVERLAY_DIR, electronBin);
 }
 
 const OVERLAY_CONFIG_PATH = path.join(os.homedir(), '.claude-overlay-config.json');
