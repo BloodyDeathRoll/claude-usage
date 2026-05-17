@@ -20,7 +20,7 @@ The numbers match the **claude.ai → Settings → Usage** page exactly — the 
 | A supported browser logged into claude.ai | Firefox, Chrome, Chromium, Brave, Edge, Vivaldi, or (Linux) Opera. Without this the extension still works, but falls back to local JSONL counting. |
 | Claude Code | Used by the local JSONL fallback to read session logs. |
 
-**No Python, no native modules, no extra installs.** Cookie reading is pure Node, with platform decryption handled via OS-builtin tools.
+**The extension itself requires no Python.** The optional Electron overlay requires **Python 3** (for `npm install` — node-gyp native builds). If you click the status bar item and get a "not installed" warning, install Python 3 from [python.org](https://www.python.org/downloads/), then run `npm install` in the overlay directory.
 
 ### Bundled runtime dependencies
 
@@ -60,8 +60,9 @@ The tooltip header shows which source is in use: `Claude Usage (live)` vs `Claud
 | `claudeUsage.sessionLimitTokens` | `null` | Session token limit for your plan. Pro=320000, Max5=1600000, Max20=6400000. |
 | `claudeUsage.weeklyLimitTokens` | `null` | Weekly token limit for your plan. |
 | `claudeUsage.weeklyModelLimits` | `null` | Per-model weekly limits, e.g. `{"sonnet": 436000, "haiku": 25000}`. |
+| `claudeUsage.overlayPath` | `null` | Absolute path to the overlay directory (where `main.js` lives). Leave null to auto-detect from common locations. |
 
-Leave them `null` to show raw token counts instead of percentages in the fallback case.
+Leave `sessionLimitTokens` and `weeklyLimitTokens` `null` to show raw token counts instead of percentages in the fallback case.
 
 ---
 

@@ -85,27 +85,62 @@ async function fetchWithOAuth() {
 function getOverlayDir() {
   const cfg = vscode.workspace.getConfiguration('claudeUsage').get('overlayPath');
   if (cfg) return cfg;
-  for (const candidate of ['claude-usage', 'usage']) {
-    const p = path.join(os.homedir(), 'Projects', candidate);
-    if (fs.existsSync(path.join(p, 'main.js'))) return p;
+  const home = os.homedir();
+  const searchRoots = [
+    path.join(home, 'Projects'),
+    path.join(home, 'Documents', 'Projects'),
+    path.join(home, 'OneDrive', 'Documents', 'Projects'),
+    path.join(home, 'OneDrive', 'Projects'),
+    path.join(home, 'Desktop'),
+  ];
+  for (const root of searchRoots) {
+    for (const candidate of ['claude-usage', 'usage']) {
+      const p = path.join(root, candidate);
+      if (fs.existsSync(path.join(p, 'main.js'))) return p;
+    }
   }
-  return path.join(os.homedir(), 'Projects', 'claude-usage');
+  return path.join(home, 'Projects', 'claude-usage');
+}
+
+function getElectronBin(overlayDir) {
+  const binDir = path.join(overlayDir, 'node_modules', '.bin');
+  if (process.platform === 'win32') {
+    const cmd = path.join(binDir, 'electron.cmd');
+    if (fs.existsSync(cmd)) return { bin: cmd, shell: true };
+    const exe = path.join(binDir, 'electron.exe');
+    if (fs.existsSync(exe)) return { bin: exe, shell: false };
+  }
+  const bin = path.join(binDir, 'electron');
+  return fs.existsSync(bin) ? { bin, shell: false } : null;
 }
 
 function openOverlay() {
-  const OVERLAY_DIR      = getOverlayDir();
-  const OVERLAY_ELECTRON = path.join(OVERLAY_DIR, 'node_modules', '.bin', 'electron');
-  if (!fs.existsSync(OVERLAY_ELECTRON)) {
-    vscode.window.showWarningMessage(`Claude Usage overlay not found at ${OVERLAY_DIR}.`);
+  const OVERLAY_DIR = getOverlayDir();
+  const electronBin = getElectronBin(OVERLAY_DIR);
+
+  if (!electronBin) {
+    const npmCmd = process.platform === 'win32' ? 'npm.cmd' : 'npm';
+    vscode.window.showWarningMessage(
+      `Claude Usage: Electron overlay not installed at ${OVERLAY_DIR}.\n` +
+      `Python 3 is required. Install it from https://python.org, then run:\n` +
+      `  cd "${OVERLAY_DIR}" && ${npmCmd} install`,
+      'Open python.org'
+    ).then(choice => {
+      if (choice === 'Open python.org') {
+        vscode.env.openExternal(vscode.Uri.parse('https://www.python.org/downloads/'));
+      }
+    });
     return;
   }
+
   const childEnv = { ...process.env };
   delete childEnv.ELECTRON_RUN_AS_NODE;
   delete childEnv.ELECTRON_NO_ATTACH_CONSOLE;
-  const child = spawn(OVERLAY_ELECTRON, [OVERLAY_DIR], {
+  const child = spawn(electronBin.bin, [OVERLAY_DIR], {
     detached: true,
     stdio: ['ignore', 'pipe', 'pipe'],
     cwd: OVERLAY_DIR,
+    shell: electronBin.shell,
     env: childEnv,
   });
   const logPath = path.join(os.tmpdir(), 'claude-usage-overlay.log');

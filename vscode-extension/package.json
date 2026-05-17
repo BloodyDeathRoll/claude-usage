@@ -2,7 +2,7 @@
   "name": "claude-usage",
   "displayName": "Claude Usage",
   "description": "Real-time Claude Code session and weekly token usage in the status bar. Shows live data from overlay cache with local JSONL fallback.",
-  "version": "0.1.5",
+  "version": "0.1.6",
   "publisher": "shahar",
   "license": "MIT",
   "repository": {
@@ -67,6 +67,14 @@
           ],
           "default": null,
           "description": "Per-model weekly limits, e.g. { \"sonnet\": 436000, \"haiku\": 25000 }. Used for local fallback only."
+        },
+        "claudeUsage.overlayPath": {
+          "type": [
+            "string",
+            "null"
+          ],
+          "default": null,
+          "description": "Absolute path to the claude-usage overlay directory (where main.js lives). Leave null to auto-detect from common locations (~/Projects/claude-usage, ~/Documents/Projects/claude-usage, ~/OneDrive/..., etc.)."
         }
       }
     }

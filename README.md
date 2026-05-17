@@ -2,7 +2,7 @@
 
 Real-time Claude Code token usage displayed in your VS Code status bar and/or as a floating desktop overlay. Shows the **exact same percentages** as the claude.ai Plan Usage Limits page — session usage, weekly usage, and extra credits — updated every 15 seconds.
 
-> **VS Code extension is now pure Node** — Python is no longer required. Cookie reading uses [`sql.js`](https://www.npmjs.com/package/sql.js) (a WASM build of SQLite) bundled with the extension.
+> **The VS Code extension is pure Node** — no Python needed for the extension itself. However, **Python 3 is required** to install the optional Electron overlay (`npm install` triggers node-gyp native builds). Install Python 3 from [python.org](https://www.python.org/downloads/) before running `npm install` in the overlay directory.
 
 ---
 
@@ -139,6 +139,7 @@ The overlay is a small always-on-top widget that sits in the corner of your scre
 
 ### Requirements
 
+- **Python 3** — required by `npm install` (node-gyp builds native dependencies). Install from [python.org](https://www.python.org/downloads/) before running `npm install`.
 - **Node.js** 18+
 - **npm**
 
@@ -147,7 +148,7 @@ The overlay is a small always-on-top widget that sits in the corner of your scre
 ```bash
 git clone https://github.com/BloodyDeathRoll/claude-usage.git
 cd claude-usage
-npm install
+npm install   # ← Python 3 must be installed first
 npm start
 ```
 
