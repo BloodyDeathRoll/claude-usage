@@ -2,7 +2,7 @@
 
 Real-time Claude Code token usage displayed in your VS Code status bar and/or as a floating desktop overlay. Shows the **exact same percentages** as the claude.ai Plan Usage Limits page — session usage, weekly usage, and extra credits — updated every 15 seconds.
 
-> **VS Code extension is now pure Node** — Python is no longer required. Cookie reading uses [`sql.js`](https://www.npmjs.com/package/sql.js) (a WASM build of SQLite) bundled with the extension.
+> **VS Code extension requires no browser login** — it reads your Claude Code OAuth token directly and hits the Anthropic inference API. No Python, no browser, no cookie access needed.
 
 ---
 
@@ -25,18 +25,18 @@ They share the same data. When the Electron overlay is running, the VS Code exte
 
 #### Option A — Install from `.vsix` (recommended)
 
-1. Download `claude-usage-0.1.0.vsix` from the [latest release](https://github.com/BloodyDeathRoll/claude-usage/releases/latest).
+1. Download `claude-usage-0.1.5.vsix` from the [latest release](https://github.com/BloodyDeathRoll/claude-usage/releases/latest).
 
 2. Install it:
 
    **Linux / macOS** — terminal:
    ```bash
-   code --install-extension claude-usage-0.1.0.vsix
+   code --install-extension claude-usage-0.1.5.vsix
    ```
 
    **Windows** — PowerShell:
    ```powershell
-   code --install-extension claude-usage-0.1.0.vsix
+   code --install-extension claude-usage-0.1.5.vsix
    ```
 
    **Or via VS Code UI** (all platforms):
@@ -53,8 +53,8 @@ They share the same data. When the Electron overlay is running, the VS Code exte
 git clone https://github.com/BloodyDeathRoll/claude-usage.git
 cd claude-usage/vscode-extension
 npm install
-npx vsce package           # produces claude-usage-0.1.0.vsix
-code --install-extension claude-usage-0.1.0.vsix
+npx vsce package           # produces claude-usage-0.1.5.vsix
+code --install-extension claude-usage-0.1.5.vsix
 ```
 
 > **Not on the VS Code Marketplace yet.** The extension is distributed via `.vsix` only. It will not appear in the Extensions search on machines where it has not been manually installed. To install on another PC, download the `.vsix` from the [latest release](https://github.com/BloodyDeathRoll/claude-usage/releases/latest) and follow Option A above.
@@ -86,9 +86,9 @@ Hover over the item for a detailed tooltip with mini progress bars and reset cou
 
 The extension tries three sources in order, stopping at the first success:
 
-1. **Cache file** (`~/.claude-usage-cache.json`) — written by the Electron overlay every 10 seconds. Exact API values, no browser interaction needed. Used if the file is less than 2 minutes old.
+1. **Cache file** (`~/.claude-usage-cache.json`) — written by the Electron overlay every 10 seconds. Includes full per-model breakdown. Used if the file is less than 10 minutes old.
 
-2. **Live API via browser cookies** — reads your browser's `sessionKey` cookie and calls the claude.ai internal API directly. Pure Node (uses bundled `sql.js`); no Python or native modules required. Supports Firefox, Chrome, Chromium, Brave, Edge, Vivaldi, and (Linux only) Opera. This gives the same exact percentages as the claude.ai settings page.
+2. **Claude Code OAuth token** — reads `~/.claude/.credentials.json` and calls `api.anthropic.com/v1/messages` with the `oauth-2025-04-20` beta header. Usage comes back in rate-limit response headers (5h session + 7d all-models). No browser, no cookies, no Cloudflare bypass needed. Works on any machine where Claude Code is installed.
 
 3. **Local JSONL fallback** — parses `~/.claude/projects/**/*.jsonl` (Claude Code's own log files) and calculates token counts locally. Percentages are estimated based on your configured plan limits.
 
@@ -99,23 +99,9 @@ The extension tries three sources in order, stopping at the first success:
 | Requirement | Notes |
 |-------------|-------|
 | VS Code 1.85+ | |
-| A supported browser logged into claude.ai | Firefox, Chrome, Chromium, Brave, Edge, Vivaldi, or (Linux) Opera. Without this the extension still works, but falls back to local JSONL counting. |
-| Claude Code | Used by the local JSONL fallback to read session logs |
+| Claude Code | Required — the extension reads your OAuth token from `~/.claude/.credentials.json` |
 
-#### Runtime dependencies (bundled in the `.vsix`)
-
-| Dependency | Why |
-|---|---|
-| [`sql.js`](https://www.npmjs.com/package/sql.js) ^1.10.3 | WASM-compiled SQLite — reads each browser's encrypted cookie database without any native module |
-
-No Python, no native build step, nothing to install separately. Platform-specific decryption uses tools that are already part of the OS:
-
-| Platform | Decryption uses |
-|---|---|
-| Linux (Chromium-based) | Built-in `crypto` (AES-128-CBC with the well-known `peanuts` key) |
-| macOS (Chromium-based) | `security find-generic-password` (already installed) to fetch the per-browser Keychain key |
-| Windows (Chromium-based) | `powershell.exe` (already installed) to call DPAPI `Unprotect` for the master key |
-| Firefox (any OS) | Direct read — Firefox cookies are unencrypted |
+No Python, no browser session, no native modules, nothing to install separately. The extension is self-contained.
 
 ---
 
@@ -221,15 +207,21 @@ Open the `.dmg`, drag the app to Applications, then launch it. macOS may warn ab
 
 ### Live API (exact values)
 
-Claude's usage page at `claude.ai/settings/limits` reads from an internal API endpoint:
+**VS Code extension** — reads the Claude Code OAuth token from `~/.claude/.credentials.json` and calls:
 
 ```
-GET /api/organizations/{orgId}/usage
+POST api.anthropic.com/v1/messages   (anthropic-beta: oauth-2025-04-20)
 ```
 
-This returns `utilization` percentages for the 5-hour session window, the 7-day weekly window, and extra credit consumption — the exact numbers shown on the settings page.
+Usage comes back as rate-limit response headers (`anthropic-ratelimit-unified-5h-utilization`, `anthropic-ratelimit-unified-7d-utilization`). No browser, no Cloudflare bypass.
 
-The API sits behind Cloudflare's bot protection, which blocks plain HTTP requests from Node.js. The Electron overlay solves this by making the request from inside a hidden Chromium window (Electron's `BrowserWindow`), which passes the Cloudflare checks transparently. The result is cached to `~/.claude-usage-cache.json` so the VS Code extension can read it without repeating the browser dance.
+**Electron overlay** — calls the claude.ai internal endpoint for full per-model data:
+
+```
+GET claude.ai/api/organizations/{orgId}/usage
+```
+
+This returns `utilization` percentages for the 5-hour session window, the 7-day weekly window, per-model breakdowns (Sonnet, Claude Design), and extra credit consumption — the exact numbers shown on the settings page. The request is made from inside a hidden Chromium window (`BrowserWindow`), which passes Cloudflare checks transparently using the stored session cookie. The org ID comes from the `lastActiveOrg` cookie (not the bootstrap API). The result is cached to `~/.claude-usage-cache.json` so the VS Code extension can read per-model data without repeating the request.
 
 ### Local JSONL fallback
 
@@ -254,32 +246,21 @@ Percentages are calculated against the plan limits you configure. Without config
 
 **Numbers don't match claude.ai (showing 0% or wrong %)**
 
-The extension needs a browser session to read exact values. On each machine:
-1. Open claude.ai in any supported browser and make sure you're logged in.
-2. Visit `claude.ai/settings/usage` once so the cookies are written to disk.
-3. Click the status bar item (or run **Claude Usage: Refresh Now**) to force a refresh.
+Make sure Claude Code is installed and you've run it at least once so the OAuth token exists at `~/.claude/.credentials.json`. Then click the status bar item (or run **Claude Usage: Refresh Now**) to force a refresh.
 
-Supported browsers (checked automatically): Firefox, Chrome, Chromium, Brave, Edge, Vivaldi, Opera (Linux only).
+If the Electron overlay is also running, its cache is used first and includes per-model data.
 
 **Tooltip says `(local estimate)` instead of `(live)`**
 
-The cookie read failed. Common causes:
-- Not logged in to claude.ai in any of the supported browsers above.
-- Using a non-default Chromium profile (only the `Default` profile is searched).
-- Using a fork the extension doesn't know about (e.g. LibreWolf, Arc on Windows).
-- **Linux Chrome with kwallet/gnome-keyring**: cookies are encrypted with a key the extension can't read. Either start Chrome with `--password-store=basic` and **log in to claude.ai again** (existing cookies won't decrypt — a fresh login is required), or use Firefox.
-- **macOS first run**: a Keychain dialog appears asking permission to read the browser's Safe Storage password. Click **Always Allow** to suppress future prompts.
-- **Chrome ≥127 v20 app-bound encryption**: the `sessionKey` cookie typically still uses v10/v11, so this is rare. If it ever breaks, fall back to Firefox (plaintext on every OS).
+The OAuth token is missing or expired. Common causes:
+- Claude Code has never been run on this machine (no `~/.claude/.credentials.json`).
+- The token expired — run `claude` once to refresh it.
 
 **Status bar shows `—` or raw token counts instead of percentages**
 
 The extension fell back to local JSONL and no plan limits are configured. Either:
-- Open claude.ai in your browser and log in (see above), or
+- Ensure Claude Code's OAuth token exists (see above), or
 - Set `claudeUsage.sessionLimitTokens` in VS Code settings to match your plan.
-
-**Cloudflare authentication prompt**
-
-Open claude.ai in your browser on this machine, complete the human-check, then click the status bar item to refresh. The `cf_clearance` cookie has to be fresh.
 
 ---
 
