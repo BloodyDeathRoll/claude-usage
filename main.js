@@ -4,7 +4,7 @@ const fs   = require('fs');
 const os   = require('os');
 
 const { getUsage, CLAUDE_PROJECTS_DIR } = require('./src/usageParser');
-const { fetchUsage, showAuthWindow, hasBrowserSession } = require('./src/claudeApi');
+const { fetchUsage, showAuthWindow, hasBrowserSession, clearCache } = require('./src/claudeApi');
 
 const CONFIG_PATH      = path.join(os.homedir(), '.claude-overlay-config.json');
 const CACHE_PATH       = path.join(os.homedir(), '.claude-usage-cache.json');
@@ -118,7 +118,7 @@ async function checkAndAutoAuth() {
   if (_authChecked) return;
   _authChecked = true;
   const has = await hasBrowserSession();
-  if (!has) showAuthWindow(() => pushUsage());
+  if (!has) showAuthWindow(() => { clearCache(); pushUsage(); });
 }
 
 function startWatcher() {

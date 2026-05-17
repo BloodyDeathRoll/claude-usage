@@ -31,9 +31,13 @@ function readOAuthToken() {
 
 // ── Strategy 1: BrowserWindow + claude.ai JSON API (full data) ────────────────
 //
-// Key insight: the usage endpoint requires the org ID from the `lastActiveOrg`
-// cookie, NOT the org UUID from /api/bootstrap's memberships array (those are
-// different orgs). The session cookie authenticates the request.
+// Org ID resolution (in order):
+//   1. lastActiveOrg cookie — fastest, set after the user has visited a workspace
+//   2. /api/organizations probe — enumerates all orgs and tries each usage endpoint
+//      until one returns data; works right after first login before any workspace visit
+//
+// Auth signal: sessionKey cookie (set immediately on login).
+// lastActiveOrg is NOT used as the auth signal — it may not be set yet.
 
 let fetcherWin   = null;
 let fetcherReady = false;
@@ -98,6 +102,41 @@ async function getClaudeAiCookies() {
   } catch { return []; }
 }
 
+// Probe each org from /api/organizations until we find one whose usage endpoint
+// returns data. Used when lastActiveOrg cookie isn't set yet (right after login).
+async function findOrgByProbe() {
+  try {
+    const orgs = await fetcherWin.webContents.executeJavaScript(`
+      (async () => {
+        try {
+          const r = await fetch('/api/organizations', { headers: { 'Accept': 'application/json' } });
+          if (!r.ok) return null;
+          return await r.json();
+        } catch { return null; }
+      })()
+    `);
+    if (!Array.isArray(orgs) || orgs.length === 0) return null;
+    for (const org of orgs) {
+      const id = org.id ?? org.uuid ?? null;
+      if (!id) continue;
+      await fetcherWin.webContents.executeJavaScript(`window.__probeId = ${JSON.stringify(id)};`);
+      const data = await fetcherWin.webContents.executeJavaScript(`
+        (async () => {
+          try {
+            const r = await fetch('/api/organizations/' + window.__probeId + '/usage',
+              { headers: { 'Accept': 'application/json' } });
+            if (!r.ok) return null;
+            const d = await r.json();
+            return (d && d.five_hour) ? d : null;
+          } catch { return null; }
+        })()
+      `);
+      if (data) return { orgId: id, data };
+    }
+    return null;
+  } catch { return null; }
+}
+
 async function fetchFromBrowserWindow() {
   if (!fetcherReady || !fetcherWin || fetcherWin.isDestroyed()) {
     if (!initPromise) initPromise = initFetcher().finally(() => { initPromise = null; });
@@ -108,26 +147,31 @@ async function fetchFromBrowserWindow() {
 
   try {
     const allCookies = await getClaudeAiCookies();
-    const orgId = allCookies.find(c => c.name === 'lastActiveOrg')?.value ?? null;
-    if (!orgId) return null;
+    const byName = Object.fromEntries(allCookies.map(c => [c.name, c.value]));
 
-    await fetcherWin.webContents.executeJavaScript(
-      `window.__oi = ${JSON.stringify(orgId)};`
-    );
+    // Require an active session
+    if (!byName.sessionKey) return null;
 
-    const data = await fetcherWin.webContents.executeJavaScript(`
-      (async () => {
-        try {
-          const r = await fetch('/api/organizations/' + window.__oi + '/usage', {
-            headers: { 'Accept': 'application/json' }
-          });
-          if (!r.ok) return null;
-          return await r.json();
-        } catch { return null; }
-      })()
-    `);
+    // Fast path: lastActiveOrg cookie is present
+    if (byName.lastActiveOrg) {
+      await fetcherWin.webContents.executeJavaScript(`window.__oi = ${JSON.stringify(byName.lastActiveOrg)};`);
+      const data = await fetcherWin.webContents.executeJavaScript(`
+        (async () => {
+          try {
+            const r = await fetch('/api/organizations/' + window.__oi + '/usage',
+              { headers: { 'Accept': 'application/json' } });
+            if (!r.ok) return null;
+            return await r.json();
+          } catch { return null; }
+        })()
+      `);
+      const result = parseFetchResult(data);
+      if (result) return result;
+    }
 
-    return parseFetchResult(data);
+    // Slow path: no lastActiveOrg yet — probe all orgs to find the right one
+    const probed = await findOrgByProbe();
+    return probed ? parseFetchResult(probed.data) : null;
   } catch { return null; }
 }
 
@@ -227,8 +271,9 @@ async function _doFetch() {
   return partial;
 }
 
-// Returns true if the hidden BrowserWindow already has a valid claude.ai session
-// (lastActiveOrg cookie present). Initialises the BrowserWindow if not yet ready.
+// Returns true if the Electron session has a valid claude.ai login (sessionKey
+// present). Does NOT require lastActiveOrg — that cookie is only set after the
+// user has visited a workspace, which may not have happened yet on first login.
 async function hasBrowserSession() {
   if (!fetcherWin || fetcherWin.isDestroyed()) {
     if (!initPromise) initPromise = initFetcher().finally(() => { initPromise = null; });
@@ -236,13 +281,13 @@ async function hasBrowserSession() {
   }
   if (!fetcherWin || fetcherWin.isDestroyed()) return false;
   const cookies = await getClaudeAiCookies();
-  return cookies.some(c => c.name === 'lastActiveOrg');
+  return cookies.some(c => c.name === 'sessionKey');
 }
 
 // Opens the hidden BrowserWindow at a usable size so the user can log into
-// claude.ai once. After login is detected (lastActiveOrg cookie appears) the
-// window is hidden again and onLoggedIn() is called. Cookies persist on disk
-// so all subsequent fetchFromBrowserWindow calls work without re-auth.
+// claude.ai once. Detects login via sessionKey (set immediately on login —
+// does not wait for lastActiveOrg). Cookies persist to disk so subsequent
+// launches skip this entirely.
 async function showAuthWindow(onLoggedIn) {
   if (!fetcherWin || fetcherWin.isDestroyed()) {
     if (!initPromise) initPromise = initFetcher().finally(() => { initPromise = null; });
@@ -259,19 +304,18 @@ async function showAuthWindow(onLoggedIn) {
   const poll = setInterval(async () => {
     if (!fetcherWin || fetcherWin.isDestroyed()) { clearInterval(poll); return; }
     const cookies = await getClaudeAiCookies();
-    const byName = Object.fromEntries(cookies.map(c => [c.name, c.value]));
-
-    if (byName.lastActiveOrg) {
+    if (cookies.some(c => c.name === 'sessionKey')) {
       clearInterval(poll);
       fetcherWin.setAlwaysOnTop(false);
       fetcherWin.hide();
       fetcherReady = true;
       if (onLoggedIn) onLoggedIn();
-    } else if (byName.sessionKey) {
-      // Logged in but lastActiveOrg not set yet — navigate to main page to trigger it
-      try { await fetcherWin.webContents.executeJavaScript(`window.location.href='https://claude.ai'`); } catch {}
     }
   }, 2000);
 }
 
-module.exports = { fetchUsage, showAuthWindow, hasBrowserSession };
+function clearCache() {
+  try { fs.unlinkSync(CACHE_PATH); } catch {}
+}
+
+module.exports = { fetchUsage, showAuthWindow, hasBrowserSession, clearCache };
