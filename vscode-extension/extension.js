@@ -7,9 +7,6 @@ const { spawn } = require('child_process');
 const { getUsage } = require('./src/usageParser');
 
 // ── OAuth fetch via inference API headers ─────────────────────────────────────
-// Reads the Claude Code OAuth token and pings api.anthropic.com/v1/messages.
-// Usage percentages come back in rate-limit response headers — no browser,
-// no cookies, no Cloudflare bypass needed.
 
 const CLAUDE_CREDS_PATH = path.join(os.homedir(), '.claude', '.credentials.json');
 
@@ -81,258 +78,144 @@ async function fetchWithOAuth() {
   });
 }
 
-// ── Detail panel (webview) ────────────────────────────────────────────────────
-// Self-contained VS Code webview panel — no Electron overlay, no npm install,
-// works on every machine the moment the extension is installed.
+// ── Overlay management ────────────────────────────────────────────────────────
+// The overlay source files are bundled inside this extension (overlay-src/).
+// On first launch they are extracted to ~/.claude-usage-overlay and
+// `npm install` is run automatically. No manual steps required on any OS.
 
-let panelInstance = null;
-
-function openDetailPanel() {
-  if (panelInstance) {
-    panelInstance.reveal(vscode.ViewColumn.Beside, true);
-    return;
-  }
-
-  const panel = vscode.window.createWebviewPanel(
-    'claudeUsageDetail',
-    'Claude Usage',
-    { viewColumn: vscode.ViewColumn.Beside, preserveFocus: true },
-    { enableScripts: false }
-  );
-
-  panelInstance = panel;
-  panel.onDidDispose(() => { panelInstance = null; });
-  panel.webview.html = getDetailHtml(currentData);
-}
-
-function updatePanel() {
-  if (panelInstance) panelInstance.webview.html = getDetailHtml(currentData);
-}
-
-function getDetailHtml(data) {
-  const esc = s => String(s ?? '').replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;');
-
-  function colorClass(pct) {
-    if (pct == null) return 'normal';
-    if (pct >= 85) return 'error';
-    if (pct >= 60) return 'warn';
-    return 'normal';
-  }
-
-  function barHtml(pct) {
-    const cls = colorClass(pct);
-    const w   = pct != null ? Math.min(100, Math.max(0, pct)) : 0;
-    return `<div class="bar-track"><div class="bar-fill ${cls}" style="width:${w}%"></div></div>`;
-  }
-
-  function fmtReset(resetsAt) {
-    if (!resetsAt) return '';
-    const ms = new Date(resetsAt).getTime() - Date.now();
-    if (ms <= 0) return 'resets soon';
-    const h = Math.floor(ms / 3600000);
-    const m = Math.floor((ms % 3600000) / 60000);
-    if (h >= 24) { const d = Math.floor(h / 24); return `resets in ${d}d ${h % 24}h`; }
-    if (h > 0)   return `resets in ${h}h ${String(m).padStart(2, '0')}m`;
-    return `resets in ${m}m`;
-  }
-
-  function rowHtml(label, slot) {
-    if (!slot) return '';
-    const pct = slot.pct;
-    const cls = colorClass(pct);
-    const val = pct != null ? `${Math.round(pct)}%` : '—';
-    const rst = fmtReset(slot.resetsAt);
-    return `<div class="row">
-  <div class="row-hd"><span>${esc(label)}</span><span class="val ${cls}">${val}</span></div>
-  ${barHtml(pct)}
-  ${rst ? `<div class="rst">${esc(rst)}</div>` : ''}
-</div>`;
-  }
-
-  function fmtAgo(date) {
-    if (!date) return '';
-    const s = Math.round((Date.now() - new Date(date).getTime()) / 1000);
-    if (s < 5)    return 'just now';
-    if (s < 60)   return `${s}s ago`;
-    if (s < 3600) return `${Math.floor(s / 60)}m ago`;
-    return `${Math.floor(s / 3600)}h ago`;
-  }
-
-  const css = `
-* { box-sizing:border-box; margin:0; padding:0; }
-body {
-  font-family: var(--vscode-font-family);
-  font-size: var(--vscode-font-size);
-  color: var(--vscode-foreground);
-  background: var(--vscode-editor-background);
-  padding: 20px 24px;
-  max-width: 440px;
-}
-h1 { font-size:1.1em; font-weight:600; margin-bottom:2px; }
-.sub { font-size:.82em; color:var(--vscode-descriptionForeground); margin-bottom:22px; }
-.sec { margin-bottom:20px; }
-.sec-t {
-  font-size:.72em; text-transform:uppercase; letter-spacing:.06em;
-  color:var(--vscode-descriptionForeground);
-  margin-bottom:10px; padding-bottom:5px;
-  border-bottom:1px solid var(--vscode-panel-border,#333);
-}
-.row { margin-bottom:10px; }
-.row-hd { display:flex; justify-content:space-between; margin-bottom:5px; font-size:.9em; }
-.val { font-weight:600; font-variant-numeric:tabular-nums; min-width:3.2em; text-align:right; }
-.val.warn  { color:var(--vscode-statusBarItem-warningForeground,#c8a400); }
-.val.error { color:var(--vscode-statusBarItem-errorForeground,#f14c4c); }
-.bar-track { height:4px; background:var(--vscode-editorWidget-border,#454545); border-radius:2px; overflow:hidden; }
-.bar-fill { height:100%; border-radius:2px; }
-.bar-fill.normal { background:var(--vscode-progressBar-background,#0078d4); }
-.bar-fill.warn   { background:var(--vscode-statusBarItem-warningForeground,#c8a400); }
-.bar-fill.error  { background:var(--vscode-statusBarItem-errorForeground,#f14c4c); }
-.rst { font-size:.78em; color:var(--vscode-descriptionForeground); margin-top:3px; }
-.footer { font-size:.78em; color:var(--vscode-descriptionForeground); margin-top:8px; }
-`;
-
-  if (!data) {
-    return `<!DOCTYPE html><html lang="en"><head><meta charset="UTF-8">
-<meta http-equiv="Content-Security-Policy" content="default-src 'none'; style-src 'unsafe-inline';">
-<style>${css}</style></head>
-<body><h1>Claude Usage</h1><div class="sub">Loading…</div></body></html>`;
-  }
-
-  const sourceLabel = data.source === 'api' ? 'Live data' : 'Local estimate';
-  const ago = fmtAgo(data.lastUpdated);
-
-  const hasWeekly = data.allModels || data.sonnetOnly || data.claudeDesign;
-  const weeklyHtml = hasWeekly ? `<div class="sec">
-  <div class="sec-t">Weekly Limits</div>
-  ${rowHtml('All models (7d)', data.allModels)}
-  ${data.sonnetOnly   ? rowHtml('Sonnet only',    data.sonnetOnly)   : ''}
-  ${data.claudeDesign ? rowHtml('Claude Design',  data.claudeDesign) : ''}
-</div>` : '';
-
-  const ex = data.extraUsage;
-  const extraHtml = (ex && (ex.enabled || (ex.usedCredits != null && ex.usedCredits > 0))) ? (() => {
-    const credits = ex.usedCredits != null ? `$${Number(ex.usedCredits).toFixed(2)}` : '$0.00';
-    const limit   = ex.monthlyLimit != null ? ` / $${Number(ex.monthlyLimit).toFixed(2)}` : '';
-    return `<div class="sec">
-  <div class="sec-t">Extra Usage</div>
-  <div class="row">
-    <div class="row-hd"><span>Credits used</span><span class="val">${esc(credits + limit)}</span></div>
-    ${ex.pct != null ? barHtml(ex.pct) : ''}
-  </div>
-</div>`;
-  })() : '';
-
-  return `<!DOCTYPE html>
-<html lang="en">
-<head>
-<meta charset="UTF-8">
-<meta http-equiv="Content-Security-Policy" content="default-src 'none'; style-src 'unsafe-inline';">
-<style>${css}</style>
-</head>
-<body>
-<h1>Claude Usage</h1>
-<div class="sub">${esc(sourceLabel)} · updated ${esc(ago)}</div>
-
-<div class="sec">
-  <div class="sec-t">Current Session (5h)</div>
-  ${rowHtml('Session usage', data.session)}
-</div>
-
-${weeklyHtml}
-${extraHtml}
-
-<div class="footer">Refreshes every 15 s · Run "Claude Usage: Refresh Now" to force update</div>
-</body>
-</html>`;
-}
-
-// ── External Electron overlay (optional) ──────────────────────────────────────
-// Launched via "Claude Usage: Open External Overlay" from the command palette.
-// Not required for any core functionality — the webview panel above covers
-// everything the overlay shows, without any external dependencies.
+const OVERLAY_BUNDLED_SRC = path.join(__dirname, 'overlay-src');
+const OVERLAY_MANAGED_DIR = path.join(os.homedir(), '.claude-usage-overlay');
 
 function getOverlayDir() {
+  // 1. Explicit user override
   const cfg = vscode.workspace.getConfiguration('claudeUsage').get('overlayPath');
-  if (cfg) return cfg;
+  if (cfg && fs.existsSync(path.join(cfg, 'main.js'))) return cfg;
 
+  // 2. Auto-managed install location (written by this extension)
+  if (fs.existsSync(path.join(OVERLAY_MANAGED_DIR, 'main.js'))) return OVERLAY_MANAGED_DIR;
+
+  // 3. Dev / manual clone locations (checked for convenience on dev machines)
   const home = os.homedir();
   const candidates = [
-    // Linux / macOS
     path.join(home, 'Projects', 'claude-usage'),
     path.join(home, 'Projects', 'usage'),
     path.join(home, 'Documents', 'Projects', 'claude-usage'),
-    // Windows standard Documents
-    path.join(home, 'Documents', 'Projects', 'claude-usage'),
-    // Windows OneDrive-redirected Documents (default on Windows 11)
     path.join(home, 'OneDrive', 'Documents', 'Projects', 'claude-usage'),
     path.join(home, 'OneDrive', 'Documents', 'Projects', 'usage'),
     path.join(home, 'OneDrive', 'Projects', 'claude-usage'),
   ];
-
   for (const p of candidates) {
     if (fs.existsSync(path.join(p, 'main.js'))) return p;
   }
-  return null;
+
+  // 4. Fall through to managed dir (will be set up by ensureOverlayReady)
+  return OVERLAY_MANAGED_DIR;
 }
 
-function launchExternalOverlay() {
-  const OVERLAY_DIR = getOverlayDir();
-  if (!OVERLAY_DIR) {
-    vscode.window.showWarningMessage(
-      'Claude Usage: overlay repo not found. Set "claudeUsage.overlayPath" in VS Code settings to the folder containing main.js.',
-      'Open Settings'
-    ).then(sel => {
-      if (sel === 'Open Settings')
-        vscode.commands.executeCommand('workbench.action.openSettings', 'claudeUsage.overlayPath');
+function copyDirSync(src, dest) {
+  fs.mkdirSync(dest, { recursive: true });
+  for (const entry of fs.readdirSync(src, { withFileTypes: true })) {
+    const s = path.join(src, entry.name);
+    const d = path.join(dest, entry.name);
+    if (entry.isDirectory()) copyDirSync(s, d);
+    else fs.copyFileSync(s, d);
+  }
+}
+
+function electronBinPath(dir) {
+  const name = process.platform === 'win32' ? 'electron.cmd' : 'electron';
+  return path.join(dir, 'node_modules', '.bin', name);
+}
+
+// npm/npm.cmd location — prefer the one on PATH, but also probe beside node
+function npmCommand() {
+  if (process.platform === 'win32') return 'npm.cmd';
+  return 'npm';
+}
+
+function runNpmInstall(dir) {
+  return new Promise((resolve, reject) => {
+    const child = spawn(npmCommand(), ['install'], {
+      cwd: dir,
+      shell: process.platform === 'win32',
+      stdio: 'pipe',
     });
+    let stderr = '';
+    child.stderr?.on('data', d => { stderr += d.toString(); });
+    child.on('error', err => reject(new Error(`npm not found: ${err.message}`)));
+    child.on('close', code => {
+      if (code === 0) resolve();
+      else reject(new Error(`npm install failed (code ${code})\n${stderr.slice(-500)}`));
+    });
+  });
+}
+
+// Returns the overlay directory, setting it up automatically if needed.
+// Shows a VS Code progress notification during the first-time npm install.
+async function ensureOverlayReady() {
+  const overlayDir = getOverlayDir();
+
+  // Extract bundled source files if the managed dir doesn't exist yet
+  const needsExtract = overlayDir === OVERLAY_MANAGED_DIR &&
+                       !fs.existsSync(path.join(overlayDir, 'main.js'));
+  if (needsExtract) {
+    copyDirSync(OVERLAY_BUNDLED_SRC, overlayDir);
+  }
+
+  // Install npm deps if Electron binary is missing
+  if (!fs.existsSync(electronBinPath(overlayDir))) {
+    await vscode.window.withProgress({
+      location: vscode.ProgressLocation.Notification,
+      title:    'Claude Usage: setting up overlay (first time, ~1 min)…',
+      cancellable: false,
+    }, () => runNpmInstall(overlayDir));
+  }
+
+  return overlayDir;
+}
+
+// ── Overlay launch ────────────────────────────────────────────────────────────
+
+async function openOverlay() {
+  let overlayDir;
+  try {
+    overlayDir = await ensureOverlayReady();
+  } catch (err) {
+    vscode.window.showErrorMessage(`Claude Usage: overlay setup failed — ${err.message}`);
     return;
   }
 
-  // npm creates electron.cmd on Windows; Unix gets a plain shell shim.
-  const binName       = process.platform === 'win32' ? 'electron.cmd' : 'electron';
-  const OVERLAY_ELECTRON = path.join(OVERLAY_DIR, 'node_modules', '.bin', binName);
-
-  if (!fs.existsSync(OVERLAY_ELECTRON)) {
-    vscode.window.showWarningMessage(
-      `Claude Usage: Electron not installed in ${OVERLAY_DIR}. Run "npm install" in that folder first.`,
-      'Copy Command'
-    ).then(sel => {
-      if (sel === 'Copy Command')
-        vscode.env.clipboard.writeText(`cd "${OVERLAY_DIR}" && npm install`);
-    });
-    return;
-  }
-
+  const electronBin = electronBinPath(overlayDir);
   const childEnv = { ...process.env };
   delete childEnv.ELECTRON_RUN_AS_NODE;
   delete childEnv.ELECTRON_NO_ATTACH_CONSOLE;
-  const child = spawn(OVERLAY_ELECTRON, [OVERLAY_DIR], {
+
+  const child = spawn(electronBin, [overlayDir], {
     detached: true,
-    shell: process.platform === 'win32', // .cmd files require a shell on Windows
-    stdio: ['ignore', 'pipe', 'pipe'],
-    cwd: OVERLAY_DIR,
-    env: childEnv,
+    shell:    process.platform === 'win32',
+    stdio:    ['ignore', 'pipe', 'pipe'],
+    cwd:      overlayDir,
+    env:      childEnv,
   });
+
   const logPath = path.join(os.tmpdir(), 'claude-usage-overlay.log');
   let output = '';
   child.stdout?.on('data', d => { output += d.toString(); });
   child.stderr?.on('data', d => { output += d.toString(); });
   child.on('error', err => {
-    try { fs.writeFileSync(logPath, `spawn error: ${err.stack || err.message}\n`); } catch {}
+    try { fs.writeFileSync(logPath, `spawn error: ${err.stack}\n`); } catch {}
     vscode.window.showErrorMessage(`Claude Usage: failed to launch overlay — ${err.message}`);
   });
-  child.on('exit', (code, signal) => {
+  child.on('exit', (code) => {
     if (code !== 0 && code !== null) {
       try { fs.writeFileSync(logPath, output || '<no output>'); } catch {}
-      vscode.window.showErrorMessage(
-        `Claude Usage: overlay exited (code=${code}). Log: ${logPath}`
-      );
+      vscode.window.showErrorMessage(`Claude Usage: overlay exited (code=${code}). Log: ${logPath}`);
     }
   });
   child.unref();
 }
 
-// ── Overlay config (shared with the Electron overlay) ────────────────────────
+// ── Overlay config (shared settings file) ────────────────────────────────────
 
 const OVERLAY_CONFIG_PATH = path.join(os.homedir(), '.claude-overlay-config.json');
 
@@ -359,14 +242,13 @@ let lastWatchRefresh = 0;
 
 function activate(context) {
   statusItem = vscode.window.createStatusBarItem(vscode.StatusBarAlignment.Right, 1000);
-  statusItem.command = 'claudeUsage.openPanel';
+  statusItem.command = 'claudeUsage.openOverlay';
   statusItem.show();
 
   context.subscriptions.push(
     statusItem,
-    vscode.commands.registerCommand('claudeUsage.openPanel',           openDetailPanel),
-    vscode.commands.registerCommand('claudeUsage.openExternalOverlay', launchExternalOverlay),
-    vscode.commands.registerCommand('claudeUsage.refresh',             () => refresh(true)),
+    vscode.commands.registerCommand('claudeUsage.openOverlay', openOverlay),
+    vscode.commands.registerCommand('claudeUsage.refresh',     () => refresh(true)),
     { dispose: () => clearInterval(timer) },
     { dispose: () => { try { watcher?.close(); } catch {} } },
   );
@@ -376,8 +258,6 @@ function activate(context) {
   startClaudeWatcher();
 }
 
-// Watch ~/.claude/projects/ for JSONL writes — refreshes the moment a Claude
-// session starts producing data instead of waiting up to 15 s for the poll.
 function startClaudeWatcher() {
   if (!fs.existsSync(CLAUDE_PROJECTS_DIR)) {
     try { fs.mkdirSync(CLAUDE_PROJECTS_DIR, { recursive: true }); } catch { return; }
@@ -393,7 +273,7 @@ function startClaudeWatcher() {
         refresh(false);
       }, WATCH_DEBOUNCE_MS);
     });
-    watcher.on('error', () => {}); // swallow — poll still covers us
+    watcher.on('error', () => {});
   } catch {}
 }
 
@@ -410,7 +290,6 @@ function readCache() {
   return null;
 }
 
-let currentData   = null;
 let lastApiResult = null;
 let lastApiTime   = 0;
 const API_MEM_CACHE_MS = 2 * 60 * 1000;
@@ -418,12 +297,12 @@ const API_MEM_CACHE_MS = 2 * 60 * 1000;
 async function refresh(manual) {
   const cfg = vscode.workspace.getConfiguration('claudeUsage');
 
-  // 1. Overlay cache — full per-model data, written by the Electron overlay
+  // 1. Overlay cache — full per-model data
   const cached = readCache();
   if (cached) { render(cached); return; }
 
-  // 2. OAuth inference headers — works anywhere Claude Code is installed.
-  //    Kept in memory only so we never overwrite the overlay's richer cache.
+  // 2. OAuth inference headers — kept in memory so we never overwrite the
+  //    overlay's richer cache with the partial (no Sonnet/Design) result
   const now = Date.now();
   if (manual || !lastApiResult || (now - lastApiTime) > API_MEM_CACHE_MS) {
     lastApiResult = await fetchWithOAuth();
@@ -458,8 +337,6 @@ function fmtVal(pct, tokens) {
 }
 
 function render(data) {
-  currentData = data;
-
   const sPct = data.session?.pct   ?? null;
   const wPct = data.allModels?.pct ?? null;
   const ex   = data.extraUsage;
@@ -474,8 +351,6 @@ function render(data) {
   statusItem.text    = `$(cloud) ${parts.join(' · ')}`;
   statusItem.color   = themeColor(Math.max(sPct ?? 0, wPct ?? 0, ePct ?? 0));
   statusItem.tooltip = buildTooltip(data);
-
-  updatePanel();
 }
 
 function themeColor(pct) {

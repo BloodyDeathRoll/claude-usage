@@ -1,5 +1,6 @@
 .vscode/**
 .vscodeignore
+*.vsix
 node_modules/.bin
 node_modules/**/test
 node_modules/**/*.md
