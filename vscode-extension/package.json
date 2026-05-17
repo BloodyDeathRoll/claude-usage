@@ -1,8 +1,8 @@
 {
   "name": "claude-usage",
   "displayName": "Claude Usage",
-  "description": "Real-time Claude Code session and weekly token usage in the status bar. Click to launch the always-on-top overlay — installs automatically on first use.",
-  "version": "0.1.8",
+  "description": "Real-time Claude Code session and weekly token usage in the status bar. Shows live data from overlay cache with local JSONL fallback.",
+  "version": "0.1.5",
   "publisher": "shahar",
   "license": "MIT",
   "repository": {
@@ -16,43 +16,57 @@
   "engines": {
     "vscode": "^1.85.0"
   },
-  "categories": ["Other"],
-  "keywords": ["claude", "anthropic", "usage", "tokens", "ai"],
-  "activationEvents": ["onStartupFinished"],
+  "categories": [
+    "Other"
+  ],
+  "keywords": [
+    "claude",
+    "anthropic",
+    "usage",
+    "tokens",
+    "ai"
+  ],
+  "activationEvents": [
+    "onStartupFinished"
+  ],
   "main": "./extension.js",
   "contributes": {
     "commands": [
       {
-        "command": "claudeUsage.openOverlay",
-        "title": "Claude Usage: Open Overlay"
-      },
-      {
         "command": "claudeUsage.refresh",
         "title": "Claude Usage: Refresh Now"
+      },
+      {
+        "command": "claudeUsage.openOverlay",
+        "title": "Claude Usage: Open Detailed Overlay"
       }
     ],
     "configuration": {
       "title": "Claude Usage",
       "properties": {
         "claudeUsage.sessionLimitTokens": {
-          "type": ["number", "null"],
+          "type": [
+            "number",
+            "null"
+          ],
           "default": null,
           "description": "Session token limit for your plan (used for local fallback %). Pro=320000, Max5=1600000, Max20=6400000. Leave null to show raw counts."
         },
         "claudeUsage.weeklyLimitTokens": {
-          "type": ["number", "null"],
+          "type": [
+            "number",
+            "null"
+          ],
           "default": null,
           "description": "Weekly token limit for your plan (used for local fallback %)."
         },
         "claudeUsage.weeklyModelLimits": {
-          "type": ["object", "null"],
+          "type": [
+            "object",
+            "null"
+          ],
           "default": null,
           "description": "Per-model weekly limits, e.g. { \"sonnet\": 436000, \"haiku\": 25000 }. Used for local fallback only."
-        },
-        "claudeUsage.overlayPath": {
-          "type": ["string", "null"],
-          "default": null,
-          "description": "Override the overlay directory. Leave null to use the auto-managed install at ~/.claude-usage-overlay."
         }
       }
     }

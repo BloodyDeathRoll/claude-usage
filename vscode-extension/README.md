@@ -6,9 +6,9 @@ Real-time Claude Code session and weekly token usage in the VS Code status bar.
 ☁ Session: 61% · Weekly: 75% · Extra: 12%
 ```
 
-**Click the status bar item** to launch the always-on-top floating overlay. On first click the overlay installs itself automatically — no cloning, no manual `npm install`, no extra steps on any OS.
+Hover for a detailed tooltip with mini progress bars and reset countdowns. Click to force an immediate refresh, or to open the optional always-on-top Electron overlay.
 
-Hover for a tooltip with mini progress bars and reset countdowns. The numbers match **claude.ai → Settings → Usage** exactly.
+The numbers match the **claude.ai → Settings → Usage** page exactly — the extension reads your browser's `sessionKey` cookie and calls the same internal API. If no cookie is available, it falls back to parsing Claude Code's local JSONL session logs.
 
 ---
 
@@ -17,35 +17,51 @@ Hover for a tooltip with mini progress bars and reset countdowns. The numbers ma
 | Requirement | Notes |
 |---|---|
 | VS Code 1.85+ | |
-| Node.js + npm | Used for the overlay's one-time auto-install. Present on any machine with Claude Code. |
-| Claude Code | Provides the OAuth token for live data. Without it the extension falls back to local JSONL counting. |
+| A supported browser logged into claude.ai | Firefox, Chrome, Chromium, Brave, Edge, Vivaldi, or (Linux) Opera. Without this the extension still works, but falls back to local JSONL counting. |
+| Claude Code | Used by the local JSONL fallback to read session logs. |
 
-**No Python. No browser. No manual setup.**
+**No Python, no native modules, no extra installs.** Cookie reading is pure Node, with platform decryption handled via OS-builtin tools.
+
+### Bundled runtime dependencies
+
+| Package | Version | Why |
+|---|---|---|
+| [`sql.js`](https://www.npmjs.com/package/sql.js) | ^1.10.3 | WASM-compiled SQLite — reads each browser's encrypted cookie database without any native module. |
+
+Decryption per platform:
+
+| Platform | Method | Tool used (already on the OS) |
+|---|---|---|
+| Linux (Chromium-based) | AES-128-CBC with the well-known `peanuts` key | Node `crypto` |
+| macOS (Chromium-based) | AES-128-CBC with a Keychain-derived key | `security find-generic-password` |
+| Windows (Chromium-based) | AES-256-GCM with a DPAPI-unwrapped master key | `powershell.exe` (DPAPI `Unprotect`) |
+| Firefox (any OS) | None — cookies are plaintext SQLite | Node `crypto` (just for SQLite read) |
 
 ---
 
 ## How it gets data
 
-Three sources tried in order, stopping at the first success:
+The extension tries three sources in order, stopping at the first success:
 
-1. **Overlay cache** (`~/.claude-usage-cache.json`) — written by the overlay every 10 seconds. Includes full per-model breakdown (Sonnet, Claude Design). Used if less than 10 minutes old.
-2. **Claude Code OAuth token** — reads `~/.claude/.credentials.json` and calls `api.anthropic.com/v1/messages` with the `anthropic-beta: oauth-2025-04-20` header. Usage in rate-limit response headers (5h + 7d). No browser, no Cloudflare bypass.
-3. **Local JSONL** — parses `~/.claude/projects/**/*.jsonl` and estimates percentages against your configured plan limits.
+1. **Cache file** (`~/.claude-usage-cache.json`) — written by the optional Electron overlay every 10 seconds. Used if the file is less than 2 minutes old.
+2. **Live API via browser cookies** — reads your `sessionKey` from the supported browser, calls `https://claude.ai/api/organizations/{orgId}/usage`, and parses the same `utilization` / `resets_at` fields the settings page renders.
+3. **Local JSONL fallback** — parses `~/.claude/projects/**/*.jsonl` and estimates percentages against your configured plan limits.
 
-Tooltip header shows which source is active: `Claude Usage (live)` vs `Claude Usage (local estimate)`.
+The tooltip header shows which source is in use: `Claude Usage (live)` vs `Claude Usage (local estimate)`.
 
 ---
 
 ## Configuration
 
-`Ctrl+,` → search **Claude Usage**:
+`Ctrl+,` → search **Claude Usage**. These settings affect the **local JSONL fallback only** (the live API always returns exact values):
 
 | Setting | Default | Description |
 |---|---|---|
-| `claudeUsage.sessionLimitTokens` | `null` | Session token limit. Pro=320000, Max5=1600000, Max20=6400000. Local fallback only. |
-| `claudeUsage.weeklyLimitTokens` | `null` | Weekly token limit. Local fallback only. |
-| `claudeUsage.weeklyModelLimits` | `null` | Per-model weekly limits, e.g. `{"sonnet": 436000, "haiku": 25000}`. Local fallback only. |
-| `claudeUsage.overlayPath` | `null` | Override the overlay install location. Leave null to use the auto-managed `~/.claude-usage-overlay`. |
+| `claudeUsage.sessionLimitTokens` | `null` | Session token limit for your plan. Pro=320000, Max5=1600000, Max20=6400000. |
+| `claudeUsage.weeklyLimitTokens` | `null` | Weekly token limit for your plan. |
+| `claudeUsage.weeklyModelLimits` | `null` | Per-model weekly limits, e.g. `{"sonnet": 436000, "haiku": 25000}`. |
+
+Leave them `null` to show raw token counts instead of percentages in the fallback case.
 
 ---
 
@@ -53,44 +69,45 @@ Tooltip header shows which source is active: `Claude Usage (live)` vs `Claude Us
 
 | Command | Description |
 |---|---|
-| **Claude Usage: Open Overlay** | Launch the overlay (same as clicking the status bar). |
 | **Claude Usage: Refresh Now** | Force an immediate refresh. |
+| **Claude Usage: Open Detailed Overlay** | Launch the optional Electron overlay (must be installed separately). |
 
 ---
 
 ## Privacy
 
-- No data leaves your machine except requests to `api.anthropic.com` using your own OAuth token.
-- The cache file `~/.claude-usage-cache.json` contains only usage percentages and token counts — no credentials.
+- No data is sent anywhere. All network requests go only to `claude.ai` using your own browser session.
+- Cookie access is read-only. The extension copies the browser's cookie database to a tempfile, reads it via in-process `sql.js`, then deletes the tempfile.
+- The cache file `~/.claude-usage-cache.json` contains only usage percentages and token counts — no cookies, no personal data.
 
 ---
 
 ## Troubleshooting
 
-**Tooltip shows `(local estimate)` instead of `(live)`**
+**Tooltip says `(local estimate)` instead of `(live)`**
 
-- Claude Code has never been run on this machine — no `~/.claude/.credentials.json` exists yet.
-- The token expired — run `claude` once to refresh it.
+The cookie read failed. Common causes:
+- Not logged in to claude.ai in any of the supported browsers.
+- Using a non-default Chromium profile (only `Default` is searched).
+- Using a fork the extension doesn't know about (e.g. LibreWolf, Arc on Windows).
+- **Linux Chrome with kwallet/gnome-keyring**: existing cookies are encrypted with a key the extension can't read. Start Chrome with `--password-store=basic` and **log in to claude.ai again** — existing cookies won't decrypt with the new key, a fresh login is required. Or use Firefox.
+- **macOS first run**: a Keychain dialog asks permission to read the browser's Safe Storage password. Click **Always Allow** to suppress future prompts.
+- **Chrome ≥127 v20 app-bound encryption**: rare for `sessionKey`, which usually stays on v10/v11. If it ever breaks, fall back to Firefox (plaintext on every OS).
 
-**Status bar shows `—` or raw token counts**
+**Status bar shows `Cloudflare`-ish errors**
 
-Run Claude Code once (to create the OAuth token), or set `claudeUsage.sessionLimitTokens` in settings to match your plan.
+Open `claude.ai` in your browser, complete the human-check, then run **Claude Usage: Refresh Now**. The `cf_clearance` cookie has to be fresh.
 
-**Overlay setup failed**
+**Status bar shows `—` or raw token counts instead of percentages**
 
-If the auto-install fails, set it up manually:
-```bash
-cd ~/.claude-usage-overlay
-npm install
-```
-Then click the status bar item again.
+Either log in to claude.ai (see above) or set `claudeUsage.sessionLimitTokens` to match your plan.
 
 ---
 
 ## Source & feedback
 
-- [GitHub repository](https://github.com/BloodyDeathRoll/claude-usage)
-- [Issue tracker](https://github.com/BloodyDeathRoll/claude-usage/issues)
+- [GitHub repository](https://github.com/BloodyDeathRoll/claude-usage) — includes the optional Electron overlay.
+- [Issue tracker](https://github.com/BloodyDeathRoll/claude-usage/issues).
 
 ## License
 

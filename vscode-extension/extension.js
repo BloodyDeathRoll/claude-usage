@@ -6,7 +6,10 @@ const https  = require('https');
 const { spawn } = require('child_process');
 const { getUsage } = require('./src/usageParser');
 
-// ── OAuth fetch via inference API headers ─────────────────────────────────────
+// ── OAuth direct fetch via inference API headers ──────────────────────────────
+// api.anthropic.com/v1/messages accepts the Claude Code OAuth token with the
+// oauth-2025-04-20 beta header. Rate-limit utilization comes back in the
+// response headers — no browser session or Cloudflare bypass needed.
 
 const CLAUDE_CREDS_PATH = path.join(os.homedir(), '.claude', '.credentials.json');
 
@@ -27,6 +30,7 @@ function parseRateLimitHeaders(headers) {
   const sevenDReset = h('anthropic-ratelimit-unified-7d-reset');
   const overageSt   = h('anthropic-ratelimit-unified-overage-status');
   if (fiveHUtil == null && sevenDUtil == null) return null;
+  // Headers are 0–1 fractions; renderer/tooltip expects 0–100 percentages.
   const slot = (utilStr, resetStr) => utilStr == null ? null : {
     pct:      parseFloat(utilStr) * 100,
     resetsAt: resetStr ? new Date(parseInt(resetStr, 10) * 1000).toISOString() : null,
@@ -78,144 +82,50 @@ async function fetchWithOAuth() {
   });
 }
 
-// ── Overlay management ────────────────────────────────────────────────────────
-// The overlay source files are bundled inside this extension (overlay-src/).
-// On first launch they are extracted to ~/.claude-usage-overlay and
-// `npm install` is run automatically. No manual steps required on any OS.
-
-const OVERLAY_BUNDLED_SRC = path.join(__dirname, 'overlay-src');
-const OVERLAY_MANAGED_DIR = path.join(os.homedir(), '.claude-usage-overlay');
-
 function getOverlayDir() {
-  // 1. Explicit user override
   const cfg = vscode.workspace.getConfiguration('claudeUsage').get('overlayPath');
-  if (cfg && fs.existsSync(path.join(cfg, 'main.js'))) return cfg;
-
-  // 2. Auto-managed install location (written by this extension)
-  if (fs.existsSync(path.join(OVERLAY_MANAGED_DIR, 'main.js'))) return OVERLAY_MANAGED_DIR;
-
-  // 3. Dev / manual clone locations (checked for convenience on dev machines)
-  const home = os.homedir();
-  const candidates = [
-    path.join(home, 'Projects', 'claude-usage'),
-    path.join(home, 'Projects', 'usage'),
-    path.join(home, 'Documents', 'Projects', 'claude-usage'),
-    path.join(home, 'OneDrive', 'Documents', 'Projects', 'claude-usage'),
-    path.join(home, 'OneDrive', 'Documents', 'Projects', 'usage'),
-    path.join(home, 'OneDrive', 'Projects', 'claude-usage'),
-  ];
-  for (const p of candidates) {
+  if (cfg) return cfg;
+  for (const candidate of ['claude-usage', 'usage']) {
+    const p = path.join(os.homedir(), 'Projects', candidate);
     if (fs.existsSync(path.join(p, 'main.js'))) return p;
   }
-
-  // 4. Fall through to managed dir (will be set up by ensureOverlayReady)
-  return OVERLAY_MANAGED_DIR;
+  return path.join(os.homedir(), 'Projects', 'claude-usage');
 }
 
-function copyDirSync(src, dest) {
-  fs.mkdirSync(dest, { recursive: true });
-  for (const entry of fs.readdirSync(src, { withFileTypes: true })) {
-    const s = path.join(src, entry.name);
-    const d = path.join(dest, entry.name);
-    if (entry.isDirectory()) copyDirSync(s, d);
-    else fs.copyFileSync(s, d);
-  }
-}
-
-function electronBinPath(dir) {
-  const name = process.platform === 'win32' ? 'electron.cmd' : 'electron';
-  return path.join(dir, 'node_modules', '.bin', name);
-}
-
-// npm/npm.cmd location — prefer the one on PATH, but also probe beside node
-function npmCommand() {
-  if (process.platform === 'win32') return 'npm.cmd';
-  return 'npm';
-}
-
-function runNpmInstall(dir) {
-  return new Promise((resolve, reject) => {
-    const child = spawn(npmCommand(), ['install'], {
-      cwd: dir,
-      shell: process.platform === 'win32',
-      stdio: 'pipe',
-    });
-    let stderr = '';
-    child.stderr?.on('data', d => { stderr += d.toString(); });
-    child.on('error', err => reject(new Error(`npm not found: ${err.message}`)));
-    child.on('close', code => {
-      if (code === 0) resolve();
-      else reject(new Error(`npm install failed (code ${code})\n${stderr.slice(-500)}`));
-    });
-  });
-}
-
-// Returns the overlay directory, setting it up automatically if needed.
-// Shows a VS Code progress notification during the first-time npm install.
-async function ensureOverlayReady() {
-  const overlayDir = getOverlayDir();
-
-  // Extract bundled source files if the managed dir doesn't exist yet
-  const needsExtract = overlayDir === OVERLAY_MANAGED_DIR &&
-                       !fs.existsSync(path.join(overlayDir, 'main.js'));
-  if (needsExtract) {
-    copyDirSync(OVERLAY_BUNDLED_SRC, overlayDir);
-  }
-
-  // Install npm deps if Electron binary is missing
-  if (!fs.existsSync(electronBinPath(overlayDir))) {
-    await vscode.window.withProgress({
-      location: vscode.ProgressLocation.Notification,
-      title:    'Claude Usage: setting up overlay (first time, ~1 min)…',
-      cancellable: false,
-    }, () => runNpmInstall(overlayDir));
-  }
-
-  return overlayDir;
-}
-
-// ── Overlay launch ────────────────────────────────────────────────────────────
-
-async function openOverlay() {
-  let overlayDir;
-  try {
-    overlayDir = await ensureOverlayReady();
-  } catch (err) {
-    vscode.window.showErrorMessage(`Claude Usage: overlay setup failed — ${err.message}`);
+function openOverlay() {
+  const OVERLAY_DIR      = getOverlayDir();
+  const OVERLAY_ELECTRON = path.join(OVERLAY_DIR, 'node_modules', '.bin', 'electron');
+  if (!fs.existsSync(OVERLAY_ELECTRON)) {
+    vscode.window.showWarningMessage(`Claude Usage overlay not found at ${OVERLAY_DIR}.`);
     return;
   }
-
-  const electronBin = electronBinPath(overlayDir);
   const childEnv = { ...process.env };
   delete childEnv.ELECTRON_RUN_AS_NODE;
   delete childEnv.ELECTRON_NO_ATTACH_CONSOLE;
-
-  const child = spawn(electronBin, [overlayDir], {
+  const child = spawn(OVERLAY_ELECTRON, [OVERLAY_DIR], {
     detached: true,
-    shell:    process.platform === 'win32',
-    stdio:    ['ignore', 'pipe', 'pipe'],
-    cwd:      overlayDir,
-    env:      childEnv,
+    stdio: ['ignore', 'pipe', 'pipe'],
+    cwd: OVERLAY_DIR,
+    env: childEnv,
   });
-
   const logPath = path.join(os.tmpdir(), 'claude-usage-overlay.log');
-  let output = '';
-  child.stdout?.on('data', d => { output += d.toString(); });
-  child.stderr?.on('data', d => { output += d.toString(); });
+  let stderr = '';
+  child.stderr.on('data', d => { stderr += d.toString(); });
+  child.stdout.on('data', d => { stderr += d.toString(); });
   child.on('error', err => {
-    try { fs.writeFileSync(logPath, `spawn error: ${err.stack}\n`); } catch {}
-    vscode.window.showErrorMessage(`Claude Usage: failed to launch overlay — ${err.message}`);
+    fs.writeFileSync(logPath, `spawn error: ${err.stack || err.message}\n`);
+    vscode.window.showErrorMessage(`Claude Usage: failed to spawn Electron — ${err.message} (log: ${logPath})`);
   });
-  child.on('exit', (code) => {
+  child.on('exit', (code, signal) => {
     if (code !== 0 && code !== null) {
-      try { fs.writeFileSync(logPath, output || '<no output>'); } catch {}
-      vscode.window.showErrorMessage(`Claude Usage: overlay exited (code=${code}). Log: ${logPath}`);
+      try { fs.writeFileSync(logPath, stderr || '<no output>'); } catch {}
+      vscode.window.showErrorMessage(
+        `Claude Usage: Electron exited (code=${code}, signal=${signal}). Log: ${logPath}`
+      );
     }
   });
   child.unref();
 }
-
-// ── Overlay config (shared settings file) ────────────────────────────────────
 
 const OVERLAY_CONFIG_PATH = path.join(os.homedir(), '.claude-overlay-config.json');
 
@@ -224,11 +134,9 @@ function readOverlayConfig() {
   catch { return null; }
 }
 
-// ── Polling ───────────────────────────────────────────────────────────────────
-
-const POLL_MS           = 15_000;
+const POLL_MS         = 15_000;
 const WATCH_DEBOUNCE_MS = 750;
-const WATCH_MIN_GAP_MS  = 2_000;
+const WATCH_MIN_GAP_MS  = 2_000;  // don't refresh more than once per 2s from the watcher
 
 const CLAUDE_PROJECTS_DIR = path.join(os.homedir(), '.claude', 'projects');
 
@@ -237,6 +145,7 @@ let timer;
 let watcher;
 let watchDebounce;
 let lastWatchRefresh = 0;
+let lastSource = null;   // 'api' | 'local' | null
 
 // ── Activation ────────────────────────────────────────────────────────────────
 
@@ -248,7 +157,7 @@ function activate(context) {
   context.subscriptions.push(
     statusItem,
     vscode.commands.registerCommand('claudeUsage.openOverlay', openOverlay),
-    vscode.commands.registerCommand('claudeUsage.refresh',     () => refresh(true)),
+    vscode.commands.registerCommand('claudeUsage.refresh', () => refresh(true)),
     { dispose: () => clearInterval(timer) },
     { dispose: () => { try { watcher?.close(); } catch {} } },
   );
@@ -258,13 +167,18 @@ function activate(context) {
   startClaudeWatcher();
 }
 
+// Watch ~/.claude/projects/ for JSONL writes so we refresh the moment a
+// `claude` session starts producing data — instead of waiting up to 15s for
+// the next poll. Heavily debounced because JSONL grows on every message.
 function startClaudeWatcher() {
   if (!fs.existsSync(CLAUDE_PROJECTS_DIR)) {
     try { fs.mkdirSync(CLAUDE_PROJECTS_DIR, { recursive: true }); } catch { return; }
   }
   try {
     watcher = fs.watch(CLAUDE_PROJECTS_DIR, { recursive: true }, (_event, filename) => {
-      if (!filename?.toString().endsWith('.jsonl')) return;
+      if (!filename) return;
+      const name = filename.toString();
+      if (!name.endsWith('.jsonl')) return;
       clearTimeout(watchDebounce);
       watchDebounce = setTimeout(() => {
         const now = Date.now();
@@ -273,14 +187,17 @@ function startClaudeWatcher() {
         refresh(false);
       }, WATCH_DEBOUNCE_MS);
     });
-    watcher.on('error', () => {});
-  } catch {}
+    watcher.on('error', () => {});  // swallow — poll still runs
+  } catch {
+    // recursive fs.watch not supported on this platform/Node — fall through;
+    // the 15s poll still covers us.
+  }
 }
 
 // ── Data ──────────────────────────────────────────────────────────────────────
 
-const CACHE_PATH       = path.join(os.homedir(), '.claude-usage-cache.json');
-const CACHE_MAX_AGE_MS = 10 * 60 * 1000;
+const CACHE_PATH = path.join(os.homedir(), '.claude-usage-cache.json');
+const CACHE_MAX_AGE_MS = 10 * 60 * 1000; // use overlay's full data for up to 10 minutes
 
 function readCache() {
   try {
@@ -292,27 +209,31 @@ function readCache() {
 
 let lastApiResult = null;
 let lastApiTime   = 0;
-const API_MEM_CACHE_MS = 2 * 60 * 1000;
+const API_MEM_CACHE_MS = 2 * 60 * 1000; // keep in-memory API result for 2 minutes
 
 async function refresh(manual) {
   const cfg = vscode.workspace.getConfiguration('claudeUsage');
 
-  // 1. Overlay cache — full per-model data
+  // 1. Prefer the cache written by the overlay app — full per-model data
   const cached = readCache();
   if (cached) { render(cached); return; }
 
-  // 2. OAuth inference headers — kept in memory so we never overwrite the
-  //    overlay's richer cache with the partial (no Sonnet/Design) result
+  // 2. Direct OAuth fetch (works without a browser session).
+  //    Result is kept in memory only — never written to disk so we don't
+  //    overwrite the overlay's richer cache with partial (no Sonnet/Design) data.
   const now = Date.now();
   if (manual || !lastApiResult || (now - lastApiTime) > API_MEM_CACHE_MS) {
     lastApiResult = await fetchWithOAuth();
     lastApiTime   = now;
   }
-  if (lastApiResult) { render(lastApiResult); return; }
+  if (lastApiResult) {
+    render(lastApiResult);
+    return;
+  }
 
-  // 3. Local JSONL fallback
+  // 3. Fall back to JSONL local counting
   const overlayCfg = readOverlayConfig();
-  const localData  = await getUsage({
+  const localData = await getUsage({
     sessionLimitTokens: cfg.get('sessionLimitTokens') || overlayCfg?.sessionLimitTokens || 320000,
     weeklyLimitTokens:  cfg.get('weeklyLimitTokens')  || overlayCfg?.weeklyLimitTokens  || 461000,
     weeklyModelLimits:  cfg.get('weeklyModelLimits')  || overlayCfg?.weeklyModelLimits  || { sonnet: 436000, haiku: 25000, opus: 0 },
@@ -321,7 +242,7 @@ async function refresh(manual) {
   if (!localData) {
     statusItem.text    = '$(cloud-offline) Claude: —';
     statusItem.color   = undefined;
-    statusItem.tooltip = 'Claude Usage: no data yet.\nMake sure Claude Code has been used recently.';
+    statusItem.tooltip = 'Claude Usage: no data found.\nMake sure Claude Code has been used recently.';
     return;
   }
 
@@ -331,14 +252,16 @@ async function refresh(manual) {
 // ── Rendering ─────────────────────────────────────────────────────────────────
 
 function fmtVal(pct, tokens) {
-  if (pct != null)    return `${Math.round(pct)}%`;
+  if (pct != null) return `${Math.round(pct)}%`;
   if (tokens != null) return fmt(tokens);
   return '—';
 }
 
 function render(data) {
-  const sPct = data.session?.pct   ?? null;
-  const wPct = data.allModels?.pct ?? null;
+  lastSource = data.source;
+
+  const sPct = data.session?.pct    ?? null;
+  const wPct = data.allModels?.pct  ?? null;
   const ex   = data.extraUsage;
   const ePct = (ex?.enabled || ex?.pct != null) ? (ex?.pct ?? 0) : null;
 
@@ -359,12 +282,13 @@ function themeColor(pct) {
   return undefined;
 }
 
-function usageRow(label, slot) {
+function usageRow(label, slot, extra) {
   if (!slot) return '';
   const pct = slot.pct;
   const bar = miniBar(pct);
   const val = pct != null ? `**${Math.round(pct)}%**` : fmt(slot.tokens ?? 0);
-  let line  = `${label} ${bar} ${val}`;
+  let line = `${label} ${bar} ${val}`;
+  if (extra) line += extra;
   if (slot.resetsAt) {
     const ms = new Date(slot.resetsAt).getTime() - Date.now();
     line += `  *(resets ${ms > 0 ? fmtCountdown(ms) : 'soon'})*`;
@@ -383,16 +307,18 @@ function buildTooltip(data) {
 
   if (data.allModels || data.sonnetOnly || data.claudeDesign) {
     md.appendMarkdown('**Weekly limits**\n\n');
-    md.appendMarkdown(usageRow('↳ All models',    data.allModels));
-    md.appendMarkdown(usageRow('↳ Sonnet only',   data.sonnetOnly));
+    md.appendMarkdown(usageRow('↳ All models', data.allModels));
+    md.appendMarkdown(usageRow('↳ Sonnet only', data.sonnetOnly));
     md.appendMarkdown(usageRow('↳ Claude Design', data.claudeDesign));
   }
 
   const ex = data.extraUsage;
-  if (ex && (ex.enabled || (ex.usedCredits != null && ex.usedCredits > 0))) {
-    const credits = ex.usedCredits != null ? `$${Number(ex.usedCredits).toFixed(2)}` : '$0.00';
-    const limit   = ex.monthlyLimit != null ? ` / $${Number(ex.monthlyLimit).toFixed(2)}` : '';
-    md.appendMarkdown(`**Extra usage** ${miniBar(ex.pct)} ${credits}${limit}\n\n`);
+  if (ex) {
+    if (ex.enabled || (ex.usedCredits != null && ex.usedCredits > 0)) {
+      const credits = ex.usedCredits != null ? `$${Number(ex.usedCredits).toFixed(2)}` : '$0.00';
+      const limit   = ex.monthlyLimit  != null ? ` / $${Number(ex.monthlyLimit).toFixed(2)}` : '';
+      md.appendMarkdown(`**Extra usage** ${miniBar(ex.pct)} ${credits}${limit}\n\n`);
+    }
   }
 
   md.appendMarkdown(`---\n*${fmtAgo(data.lastUpdated)}*`);
