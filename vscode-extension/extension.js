@@ -103,14 +103,16 @@ function getOverlayDir() {
 }
 
 function getElectronBin(overlayDir) {
-  const binDir = path.join(overlayDir, 'node_modules', '.bin');
   if (process.platform === 'win32') {
-    const cmd = path.join(binDir, 'electron.cmd');
+    // Use the actual binary directly — bypasses electron.cmd → cmd.exe → node
+    // chain which creates a visible terminal tab in VS Code on Windows.
+    const distExe = path.join(overlayDir, 'node_modules', 'electron', 'dist', 'electron.exe');
+    if (fs.existsSync(distExe)) return { bin: distExe, shell: false };
+    // Fallback: .cmd wrapper (creates terminal tab, but better than nothing)
+    const cmd = path.join(overlayDir, 'node_modules', '.bin', 'electron.cmd');
     if (fs.existsSync(cmd)) return { bin: cmd, shell: true };
-    const exe = path.join(binDir, 'electron.exe');
-    if (fs.existsSync(exe)) return { bin: exe, shell: false };
   }
-  const bin = path.join(binDir, 'electron');
+  const bin = path.join(overlayDir, 'node_modules', '.bin', 'electron');
   return fs.existsSync(bin) ? { bin, shell: false } : null;
 }
 
@@ -137,29 +139,19 @@ function launchElectron(overlayDir, electronBin) {
   const childEnv = { ...process.env };
   delete childEnv.ELECTRON_RUN_AS_NODE;
   delete childEnv.ELECTRON_NO_ATTACH_CONSOLE;
+  // stdio:'ignore' + detached + unref = fully detached background process.
+  // Piping stdout/stderr would leave open handles that VS Code's terminal
+  // integration can attach to, creating a spurious terminal tab on Windows.
   const child = spawn(electronBin.bin, [overlayDir], {
     detached: true,
-    stdio: ['ignore', 'pipe', 'pipe'],
+    stdio: 'ignore',
     cwd: overlayDir,
     shell: electronBin.shell,
     windowsHide: true,
     env: childEnv,
   });
-  const logPath = path.join(os.tmpdir(), 'claude-usage-overlay.log');
-  let stderr = '';
-  child.stderr.on('data', d => { stderr += d.toString(); });
-  child.stdout.on('data', d => { stderr += d.toString(); });
   child.on('error', err => {
-    fs.writeFileSync(logPath, `spawn error: ${err.stack || err.message}\n`);
-    vscode.window.showErrorMessage(`Claude Usage: failed to spawn Electron — ${err.message} (log: ${logPath})`);
-  });
-  child.on('exit', (code, signal) => {
-    if (code !== 0 && code !== null) {
-      try { fs.writeFileSync(logPath, stderr || '<no output>'); } catch {}
-      vscode.window.showErrorMessage(
-        `Claude Usage: Electron exited (code=${code}, signal=${signal}). Log: ${logPath}`
-      );
-    }
+    vscode.window.showErrorMessage(`Claude Usage: failed to launch overlay — ${err.message}`);
   });
   child.unref();
 }
