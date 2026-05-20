@@ -6,6 +6,13 @@ Real-time Claude Code token usage displayed in your VS Code status bar and/or as
 
 ---
 
+## Screenshots
+
+![Screenshot 1](assets/screenshot%201.png)
+![Screenshot 3](assets/screenshot%203.png)
+
+---
+
 ## Components
 
 This repo contains two independent but complementary tools:

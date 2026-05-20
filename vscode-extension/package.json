@@ -2,7 +2,7 @@
   "name": "tracker-claude-usage",
   "displayName": "Tracker Claude Usage",
   "description": "Real-time Claude Code session and weekly token usage in the status bar. Shows live data from overlay cache with local JSONL fallback.",
-  "version": "0.3.0",
+  "version": "0.3.2",
   "publisher": "EinHanamer",
   "license": "MIT",
   "repository": {
@@ -15,6 +15,11 @@
   },
   "engines": {
     "vscode": "^1.85.0"
+  },
+  "icon": "icon.png",
+  "galleryBanner": {
+    "color": "#1e1e1e",
+    "theme": "dark"
   },
   "categories": [
     "Other"
