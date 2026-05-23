@@ -153,16 +153,21 @@ function applyApiUsage(data) {
   }
 
   // ── Additional features — Daily routine runs ──────────────────────────────
-  const runs = data.dailyRoutineRuns;
-  if (runs != null) {
+  // The /usage endpoint returns `iguana_necktie` populated only after a routine
+  // has been run. The limit ("/15" etc.) is plan-tier hardcoded in the Claude
+  // UI, so we mirror that: read the limit from plan config, and render "0 / N"
+  // when iguana_necktie is null. When non-null with utilization, convert the
+  // 0–100 percentage back to a count.
+  const routinesLimit = config?.routinesPerDay ?? 0;
+  const runs          = data.dailyRoutineRuns;
+  if (routinesLimit > 0) {
     elSectionFeatures.style.display = '';
-    if (typeof runs === 'object' && runs.utilization != null) {
-      elRoutinesValue.textContent = fmtPct(runs.utilization);
-    } else if (typeof runs === 'object' && runs.used != null) {
-      elRoutinesValue.textContent = runs.used + ' / ' + (runs.limit ?? '?');
-    } else {
-      elRoutinesValue.textContent = JSON.stringify(runs);
+    let used = 0;
+    if (runs && typeof runs === 'object') {
+      if (runs.used != null)             used = runs.used;
+      else if (runs.utilization != null) used = Math.round((runs.utilization / 100) * routinesLimit);
     }
+    elRoutinesValue.textContent = used + ' / ' + routinesLimit;
   } else {
     elSectionFeatures.style.display = 'none';
   }
@@ -316,7 +321,7 @@ $('btn-minimize').addEventListener('click', () => window.claudeUsage.minimize())
 $('btn-settings-cancel').addEventListener('click', closeSettings);
 
 $('btn-no-limit').addEventListener('click', () => {
-  window.claudeUsage.saveConfig({ plan: null, sessionLimitTokens: null, weeklyLimitTokens: null, weeklyModelLimits: null });
+  window.claudeUsage.saveConfig({ plan: null, sessionLimitTokens: null, weeklyLimitTokens: null, weeklyModelLimits: null, routinesPerDay: 0 });
   closeSettings();
 });
 
@@ -333,10 +338,12 @@ $('btn-settings-save').addEventListener('click', () => {
   if (!pendingPlan) { closeSettings(); return; }
   const btn = document.querySelector(`.plan-btn[data-plan="${pendingPlan}"]`);
   let sessionLimit, weeklyModelLimits, weeklyLimitTokens;
+  let routinesPerDay;
   if (pendingPlan === 'custom') {
     sessionLimit      = parseInt(elCustomSession.value) || 330000;
     weeklyLimitTokens = sessionLimit * 5;
     weeklyModelLimits = null;
+    routinesPerDay    = 0;
   } else {
     sessionLimit = parseInt(btn?.dataset.session);
     weeklyModelLimits = {
@@ -345,8 +352,9 @@ $('btn-settings-save').addEventListener('click', () => {
       opus:   parseInt(btn?.dataset.weeklyOpus)   || 0,
     };
     weeklyLimitTokens = Object.values(weeklyModelLimits).reduce((a, b) => a + b, 0);
+    routinesPerDay    = parseInt(btn?.dataset.routines) || 0;
   }
-  window.claudeUsage.saveConfig({ plan: pendingPlan, sessionLimitTokens: sessionLimit, weeklyLimitTokens, weeklyModelLimits });
+  window.claudeUsage.saveConfig({ plan: pendingPlan, sessionLimitTokens: sessionLimit, weeklyLimitTokens, weeklyModelLimits, routinesPerDay });
   closeSettings();
 });
 
@@ -368,12 +376,22 @@ window.claudeUsage.getConfig().then(cfg => {
       sessionLimitTokens: 320000,
       weeklyLimitTokens: 461000,
       weeklyModelLimits: { sonnet: 436000, haiku: 25000, opus: 0 },
+      routinesPerDay: 5,
     };
     config = { ...(cfg ?? {}), ...proDefaults };
     window.claudeUsage.saveConfig(proDefaults);
     if (lastData) applyUsage(lastData);
   } else {
     config = cfg;
+    // Backfill routinesPerDay for configs saved before this field existed.
+    if (config.routinesPerDay == null) {
+      const planRoutines = { pro: 5, max5: 15, max20: 60 };
+      const r = planRoutines[config.plan] ?? 0;
+      if (r > 0) {
+        config.routinesPerDay = r;
+        window.claudeUsage.saveConfig({ routinesPerDay: r });
+      }
+    }
   }
 });
 

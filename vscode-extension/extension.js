@@ -45,11 +45,12 @@ function parseClaudeAiUsage(data) {
   if (!data || !data.five_hour) return null;
   const slot = s => s ? { pct: s.utilization ?? 0, resetsAt: s.resets_at ?? null } : null;
   return {
-    source:       'api',
-    session:      slot(data.five_hour),
-    allModels:    slot(data.seven_day),
-    sonnetOnly:   slot(data.seven_day_sonnet),
-    claudeDesign: slot(data.seven_day_cowork) ?? slot(data.seven_day_omelette),
+    source:           'api',
+    session:          slot(data.five_hour),
+    allModels:        slot(data.seven_day),
+    sonnetOnly:       slot(data.seven_day_sonnet),
+    claudeDesign:     slot(data.seven_day_cowork) ?? slot(data.seven_day_omelette),
+    dailyRoutineRuns: data.iguana_necktie ?? null,
     extraUsage: data.extra_usage ? {
       enabled:      data.extra_usage.is_enabled,
       usedCredits:  data.extra_usage.used_credits,
@@ -98,11 +99,12 @@ function parseRateLimitHeaders(headers) {
     resetsAt: resetStr ? new Date(parseInt(resetStr, 10) * 1000).toISOString() : null,
   };
   return {
-    source:       'api',
-    session:      slot(fiveHUtil,  fiveHReset),
-    allModels:    slot(sevenDUtil, sevenDReset),
-    sonnetOnly:   null,
-    claudeDesign: null,
+    source:           'api',
+    session:          slot(fiveHUtil,  fiveHReset),
+    allModels:        slot(sevenDUtil, sevenDReset),
+    sonnetOnly:       null,
+    claudeDesign:     null,
+    dailyRoutineRuns: null,
     extraUsage: overageSt != null ? {
       enabled: overageSt === 'allowed',
       usedCredits: null, monthlyLimit: null, pct: null, currency: null,
@@ -484,6 +486,20 @@ function buildTooltip(data) {
     md.appendMarkdown(usageRow('↳ All models', data.allModels));
     md.appendMarkdown(usageRow('↳ Sonnet only', data.sonnetOnly));
     md.appendMarkdown(usageRow('↳ Claude Design', data.claudeDesign));
+  }
+
+  // Daily routine runs: limit is plan-tier hardcoded (Pro=5, Max5=15, Max20=60),
+  // sourced from the overlay's config. iguana_necktie is null until usage > 0.
+  const overlayCfg = readOverlayConfig();
+  const routinesLimit = overlayCfg?.routinesPerDay ?? 0;
+  if (routinesLimit > 0) {
+    const runs = data.dailyRoutineRuns;
+    let used = 0;
+    if (runs && typeof runs === 'object') {
+      if (runs.used != null)             used = runs.used;
+      else if (runs.utilization != null) used = Math.round((runs.utilization / 100) * routinesLimit);
+    }
+    md.appendMarkdown(`**Daily routine runs** **${used} / ${routinesLimit}**\n\n`);
   }
 
   const ex = data.extraUsage;

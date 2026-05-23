@@ -167,6 +167,7 @@ async function fetchFromBrowserWindow() {
 
     const orgIdFromCookie = allCookies.find(c => c.name === 'lastActiveOrg')?.value ?? null;
 
+
     // Single JS execution: try lastActiveOrg fast path first, then probe all orgs.
     // Returns { data, usedOrgId } so we can persist the working org for future calls.
     const result = await fetcherWin.webContents.executeJavaScript(`
