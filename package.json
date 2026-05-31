@@ -3,6 +3,7 @@
   "version": "1.0.0",
   "main": "main.js",
   "scripts": {
+    "test": "node --test test/",
     "start": "electron .",
     "postinstall": "node scripts/create-icons.js",
     "build:linux": "electron-builder --linux",
