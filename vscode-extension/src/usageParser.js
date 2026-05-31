@@ -16,7 +16,9 @@ function modelFamily(model) {
 }
 
 // cutoff: only count entries whose timestamp >= cutoff (ms). null = count all.
-function parseFile(filePath, cutoff = null) {
+// seenIds: optional Set shared across files so a message.id that appears in more
+// than one file (resumed/continued sessions replay prior turns) is counted once.
+function parseFile(filePath, cutoff = null, seenIds = null) {
   let raw;
   try { raw = fs.readFileSync(filePath, 'utf8'); }
   catch { return { input: 0, output: 0, cacheRead: 0, cacheCreate: 0, byModel: {}, oldest: null }; }
@@ -63,7 +65,13 @@ function parseFile(filePath, cutoff = null) {
     byModel[family].input += inp; byModel[family].output += out;
     byModel[family].cacheRead += cr; byModel[family].cacheCreate += cc;
   };
-  for (const e of byMsgId.values()) add(e);
+  for (const [id, e] of byMsgId) {
+    if (seenIds) {
+      if (seenIds.has(id)) continue; // already counted from another file
+      seenIds.add(id);
+    }
+    add(e);
+  }
   for (const e of noIdItems) add(e);
   return { input, output, cacheRead, cacheCreate, byModel, oldest };
 }
@@ -100,9 +108,14 @@ async function getUsage(cfg) {
   let weekly  = { input: 0, output: 0, billable: 0, byModel: {} };
   let sessionOldest = null;
 
+  // Cross-file de-dup: a message.id may appear in more than one jsonl (resumed
+  // sessions). Each window gets its own seen-set so they stay independent.
+  const weeklySeen  = new Set();
+  const sessionSeen = new Set();
+
   for (const { f, mtime } of weeklyFiles) {
     // Weekly: count only entries with ts in the last 7 days
-    const wu = parseFile(f, weeklyCutoff);
+    const wu = parseFile(f, weeklyCutoff, weeklySeen);
     weekly.input  += wu.input;
     weekly.output += wu.output;
     for (const [fam, c] of Object.entries(wu.byModel)) {
@@ -113,7 +126,7 @@ async function getUsage(cfg) {
 
     // Session: only parse files that could have recent entries (mtime in last 5h)
     if (mtime >= sessionCutoff) {
-      const su = parseFile(f, sessionCutoff);
+      const su = parseFile(f, sessionCutoff, sessionSeen);
       session.input       += su.input;
       session.output      += su.output;
       session.cacheRead   += su.cacheRead;

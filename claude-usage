@@ -20,7 +20,7 @@ import sqlite3, shutil, os, glob, json, tempfile, platform, sys
 def firefox_db():
     s = platform.system()
     if s == 'Linux':
-        base = os.path.expanduser("~/.config/mozilla/firefox")
+        base = os.path.expanduser("~/.mozilla/firefox")
     elif s == 'Darwin':
         base = os.path.expanduser("~/Library/Application Support/Firefox")
     elif s == 'Windows':
