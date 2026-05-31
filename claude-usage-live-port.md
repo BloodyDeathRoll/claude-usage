@@ -1,5 +1,31 @@
 # claude-usage — port live-data path to pure Node
 
+> **⚠️ SUPERSEDED — historical record only.**
+>
+> Everything below describes the **browser-cookie reader** (`browserCookies.js`,
+> `sql.js`, per-platform cookie decryption). That whole approach has since been
+> **removed**. The extension no longer reads any browser's cookie database, and
+> `browserCookies.js` / the `sql.js` dependency no longer exist.
+>
+> **Current architecture** — the live numbers are now fetched using the **Claude
+> Code OAuth token** at `~/.claude/.credentials.json`, with no browser or cookies
+> involved. Source order:
+> 1. Overlay cache (`~/.claude-usage-cache.json`, < 10 min old).
+> 2. **OAuth-direct to claude.ai** — `GET /api/organizations/{orgId}/usage` with
+>    `Authorization: Bearer <token>` + `anthropic-beta: oauth-2025-04-20` (full data).
+> 3. **Inference headers** — a 1-token `api.anthropic.com/v1/messages` call read
+>    for `anthropic-ratelimit-unified-*` headers (partial: 5h + 7d only).
+> 4. Local JSONL fallback (`~/.claude/projects/**/*.jsonl`).
+>
+> The overlay keeps one extra fallback between (3) and (4): a one-time Electron
+> login window that establishes a claude.ai session cookie *inside Electron's own
+> browser context* — this replaced the cookie reader as the last-resort full-data
+> path. See `src/claudeApi.js` and `vscode-extension/extension.js` for the live
+> implementation, and the project READMEs for the user-facing version.
+>
+> The rest of this file is kept only to document why the original cookie-reading
+> path existed and how it worked. **Do not treat any of it as current.**
+
 ## Why
 
 The status bar was showing wildly wrong numbers (e.g. 5% / 4%) compared to

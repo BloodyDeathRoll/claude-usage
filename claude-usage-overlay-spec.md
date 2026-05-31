@@ -1,5 +1,14 @@
 # Claude Usage Overlay — Build Spec
 
+> **⚠️ Partially superseded.** This is the *original* build spec, when the overlay
+> was purely a local JSONL reader with "no API calls". The overlay has since gained
+> a **live API path**: it fetches exact usage from claude.ai using the Claude Code
+> OAuth token (`~/.claude/.credentials.json`), and only falls back to the local
+> JSONL parsing described here when the API is unreachable. It is also cross-platform
+> (Linux/macOS/Windows), not Linux-only. The window/tray/JSONL-parsing sections below
+> remain accurate; the "no network calls" framing does not. See `src/claudeApi.js`
+> and the project READMEs for the current data flow.
+
 ## Overview
 
 Build an Electron desktop overlay app called `claude-usage-overlay` that sits on top of all windows and displays Claude Code token usage in real time. The app reads local session data written by Claude Code, requires no API calls, and is designed for Ubuntu Linux.

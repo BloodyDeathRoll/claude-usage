@@ -1,8 +1,8 @@
 # Claude Usage Monitor
 
-Real-time Claude Code token usage displayed in your VS Code status bar and/or as a floating desktop overlay. Shows the **exact same percentages** as the claude.ai Plan Usage Limits page — session usage, weekly usage, and extra credits — updated every 15 seconds.
+Real-time Claude Code token usage displayed in your VS Code status bar and/or as a floating desktop overlay. Shows the **exact same percentages** as the claude.ai Plan Usage Limits page — session usage, weekly usage, per-model limits, daily routine runs, and extra credits — updated every 15 seconds.
 
-> **The VS Code extension is pure Node** — no Python needed for the extension itself. However, **Python 3 is required** to install the optional Electron overlay (`npm install` triggers node-gyp native builds). Install Python 3 from [python.org](https://www.python.org/downloads/) before running `npm install` in the overlay directory.
+> **No browser login required.** The tools authenticate using the OAuth token Claude Code already stores when you log into the `claude` CLI (`~/.claude/.credentials.json`). There are no cookies to read, no `sql.js`, and no Python needed for the VS Code extension.
 
 ---
 
@@ -22,7 +22,7 @@ This repo contains two independent but complementary tools:
 | **VS Code Extension** | Adds a status bar item: `Session: 61% · Weekly: 75% · Extra: 12%` |
 | **Electron Overlay** | Always-on-top floating widget with progress bars, reset countdown, and a settings panel |
 
-They share the same data. When the Electron overlay is running, the VS Code extension reads its cache for zero-overhead exact API values. Both fall back to local JSONL parsing if the overlay is not running.
+They share the same data. When the Electron overlay is running, the VS Code extension reads its cache for zero-overhead exact API values. Both fetch directly from claude.ai using the Claude Code OAuth token, and both fall back to local JSONL parsing if the API is unreachable.
 
 ---
 
@@ -30,20 +30,19 @@ They share the same data. When the Electron overlay is running, the VS Code exte
 
 ### Installation
 
-#### Option A — Install from `.vsix` (recommended)
+#### Option A — VS Code Marketplace (recommended)
 
-1. Download `claude-usage-0.1.0.vsix` from the [latest release](https://github.com/BloodyDeathRoll/claude-usage/releases/latest).
+Search the Extensions panel (`Ctrl+Shift+X` / `Cmd+Shift+X`) for **Tracker Claude Usage** (publisher `EinHanamer`) and click **Install**.
+
+#### Option B — Install from `.vsix`
+
+1. Download the latest `tracker-claude-usage-*.vsix` from the [releases page](https://github.com/BloodyDeathRoll/claude-usage/releases/latest) (or build it from source — see Option C).
 
 2. Install it:
 
-   **Linux / macOS** — terminal:
+   **Linux / macOS / Windows** — terminal or PowerShell:
    ```bash
-   code --install-extension claude-usage-0.1.0.vsix
-   ```
-
-   **Windows** — PowerShell:
-   ```powershell
-   code --install-extension claude-usage-0.1.0.vsix
+   code --install-extension tracker-claude-usage-0.3.3.vsix
    ```
 
    **Or via VS Code UI** (all platforms):
@@ -54,17 +53,15 @@ They share the same data. When the Electron overlay is running, the VS Code exte
 
 3. Reload VS Code when prompted (`Ctrl+Shift+P` → **Developer: Reload Window**).
 
-#### Option B — Install from source
+#### Option C — Build from source
 
 ```bash
 git clone https://github.com/BloodyDeathRoll/claude-usage.git
 cd claude-usage/vscode-extension
 npm install
-npx vsce package           # produces claude-usage-0.1.0.vsix
-code --install-extension claude-usage-0.1.0.vsix
+npx vsce package           # produces tracker-claude-usage-0.3.3.vsix
+code --install-extension tracker-claude-usage-0.3.3.vsix
 ```
-
-> **Not on the VS Code Marketplace yet.** The extension is distributed via `.vsix` only. It will not appear in the Extensions search on machines where it has not been manually installed. To install on another PC, download the `.vsix` from the [latest release](https://github.com/BloodyDeathRoll/claude-usage/releases/latest) and follow Option A above.
 
 ---
 
@@ -77,7 +74,7 @@ The status bar item (bottom-right) shows:
 ```
 
 - **Session** — your 5-hour rolling usage window
-- **Weekly** — your 7-day rolling usage window
+- **Weekly** — your 7-day rolling usage window (all models)
 - **Extra** — paid credits consumed (only shown when active)
 
 Colors change automatically:
@@ -85,19 +82,23 @@ Colors change automatically:
 - Yellow warning at 60–85%
 - Red error above 85%
 
-Hover over the item for a detailed tooltip with mini progress bars and reset countdown. Click it to force an immediate refresh.
+Hover over the item for a detailed tooltip with mini progress bars, per-model weekly limits (Sonnet only / Claude Design), daily routine runs, extra-usage credits, and reset countdowns. Click it to open the optional Electron overlay.
 
 ---
 
 ### How it gets data
 
-The extension tries three sources in order, stopping at the first success:
+The extension tries four sources in order, stopping at the first success:
 
-1. **Cache file** (`~/.claude-usage-cache.json`) — written by the Electron overlay every 10 seconds. Exact API values, no browser interaction needed. Used if the file is less than 2 minutes old.
+1. **Overlay cache file** (`~/.claude-usage-cache.json`) — written by the Electron overlay every 10 seconds. Exact API values with full per-model breakdown. Used if the file is less than 10 minutes old.
 
-2. **Live API via browser cookies** — reads your browser's `sessionKey` cookie and calls the claude.ai internal API directly. Pure Node (uses bundled `sql.js`); no Python or native modules required. Supports Firefox, Chrome, Chromium, Brave, Edge, Vivaldi, and (Linux only) Opera. This gives the same exact percentages as the claude.ai settings page.
+2. **OAuth-direct to claude.ai** — reads the Claude Code OAuth token from `~/.claude/.credentials.json` and calls `https://claude.ai/api/organizations/{orgId}/usage` directly. Returns the **full** dataset (session, weekly all-models, Sonnet-only, Claude Design, daily routine runs, extra usage) — the same numbers the claude.ai settings page renders. No browser, no cookies.
 
-3. **Local JSONL fallback** — parses `~/.claude/projects/**/*.jsonl` (Claude Code's own log files) and calculates token counts locally. Percentages are estimated based on your configured plan limits.
+3. **Inference API headers** — sends a 1-token request to `api.anthropic.com/v1/messages` with the same OAuth token and reads the `anthropic-ratelimit-unified-*` response headers. This is a **partial** source: it provides the 5-hour session and 7-day weekly utilization only (no per-model breakdown). Used when claude.ai rejects the token.
+
+4. **Local JSONL fallback** — parses `~/.claude/projects/**/*.jsonl` (Claude Code's own log files) and calculates token counts locally. Percentages are estimated against your configured plan limits.
+
+The tooltip header shows which source is in use: `Claude Usage (live)` for sources 1–3, `Claude Usage (local estimate)` for source 4.
 
 ---
 
@@ -106,37 +107,24 @@ The extension tries three sources in order, stopping at the first success:
 | Requirement | Notes |
 |-------------|-------|
 | VS Code 1.85+ | |
-| A supported browser logged into claude.ai | Firefox, Chrome, Chromium, Brave, Edge, Vivaldi, or (Linux) Opera. Without this the extension still works, but falls back to local JSONL counting. |
-| Claude Code | Used by the local JSONL fallback to read session logs |
+| Claude Code, logged in | Provides the OAuth token at `~/.claude/.credentials.json` that powers the live API sources. If you can run `claude` and it's authenticated, the extension works. |
 
-#### Runtime dependencies (bundled in the `.vsix`)
-
-| Dependency | Why |
-|---|---|
-| [`sql.js`](https://www.npmjs.com/package/sql.js) ^1.10.3 | WASM-compiled SQLite — reads each browser's encrypted cookie database without any native module |
-
-No Python, no native build step, nothing to install separately. Platform-specific decryption uses tools that are already part of the OS:
-
-| Platform | Decryption uses |
-|---|---|
-| Linux (Chromium-based) | Built-in `crypto` (AES-128-CBC with the well-known `peanuts` key) |
-| macOS (Chromium-based) | `security find-generic-password` (already installed) to fetch the per-browser Keychain key |
-| Windows (Chromium-based) | `powershell.exe` (already installed) to call DPAPI `Unprotect` for the master key |
-| Firefox (any OS) | Direct read — Firefox cookies are unencrypted |
+**No browser, no Python, no native modules.** The extension is pure Node and ships with no runtime dependencies — authentication is just a bearer token read from a local file. If the token is missing or expired (e.g. you've never logged into Claude Code, or your session lapsed), the extension automatically falls back to local JSONL counting.
 
 ---
 
 ### Configuration
 
-Open VS Code settings (`Ctrl+,`) and search for **Claude Usage**. These settings affect the local JSONL fallback only (the live API always returns exact values):
+Open VS Code settings (`Ctrl+,`) and search for **Claude Usage**. These settings affect the **local JSONL fallback only** (the live API always returns exact values):
 
 | Setting | Default | Description |
 |---------|---------|-------------|
 | `claudeUsage.sessionLimitTokens` | `null` | Session token limit for your plan. Pro=320000, Max5=1600000, Max20=6400000 |
 | `claudeUsage.weeklyLimitTokens` | `null` | Weekly token limit for your plan |
 | `claudeUsage.weeklyModelLimits` | `null` | Per-model weekly limits, e.g. `{"sonnet": 436000, "haiku": 25000}` |
+| `claudeUsage.overlayPath` | `null` | Absolute path to the overlay directory (where `main.js` lives). Leave null to auto-detect from common locations |
 
-Leave these `null` to show raw token counts instead of percentages in the fallback case.
+Leave the limit settings `null` to show raw token counts instead of percentages in the fallback case.
 
 ---
 
@@ -146,20 +134,21 @@ The overlay is a small always-on-top widget that sits in the corner of your scre
 
 ### Requirements
 
-- **Python 3** — required by `npm install` (node-gyp builds native dependencies). Install from [python.org](https://www.python.org/downloads/) before running `npm install`.
-- **Node.js** 18+
-- **npm**
+- **Node.js** 18+ and **npm**
+- **Python 3** — may be required by `npm install` on some platforms (node-gyp builds for optional native deps). Install from [python.org](https://www.python.org/downloads/) if `npm install` fails with a build error.
 
 ### Running from source
 
 ```bash
 git clone https://github.com/BloodyDeathRoll/claude-usage.git
 cd claude-usage
-npm install   # ← Python 3 must be installed first
+npm install
 npm start
 ```
 
 The overlay appears as a small dark widget. You can drag it anywhere on screen; its position is remembered between launches.
+
+On first launch the overlay tries the OAuth token automatically. If the token can't reach claude.ai (rare), the tray menu's **Connect to claude.ai** option opens a one-time login window — this is the *only* path that uses a browser session, and only as a fallback.
 
 ### Controls
 
@@ -169,7 +158,8 @@ The overlay appears as a small dark widget. You can drag it anywhere on screen; 
 | Minimize to tray | Click the `−` button |
 | Restore from tray | Click the tray icon |
 | Open settings | Click the `⚙` button |
-| Quit | Right-click the tray icon → Quit |
+| Connect to claude.ai (fallback login) | Right-click the tray icon → **Connect to claude.ai** |
+| Quit | Right-click the tray icon → **Quit** |
 
 ### Settings panel
 
@@ -182,7 +172,7 @@ Click the gear icon to open the settings panel. Choose your plan:
 | Max20 | 6,400,000 tokens | 9,200,000 tokens |
 | Custom | Your choice | 5× session limit |
 
-You can also set per-model weekly limits (Sonnet / Haiku / Opus) for granular tracking.
+You can also set per-model weekly limits (Sonnet / Haiku / Opus) and your plan's daily routine-run allowance for granular tracking. These configured limits only matter for the local JSONL fallback; live API values are always exact.
 
 ### Building a distributable
 
@@ -227,7 +217,7 @@ Open the `.dmg`, drag the app to Applications, then launch it. macOS may warn ab
 
 ## How it works
 
-### Live API (exact values)
+### Live API via the OAuth token (exact values)
 
 Claude's usage page at `claude.ai/settings/limits` reads from an internal API endpoint:
 
@@ -235,9 +225,16 @@ Claude's usage page at `claude.ai/settings/limits` reads from an internal API en
 GET /api/organizations/{orgId}/usage
 ```
 
-This returns `utilization` percentages for the 5-hour session window, the 7-day weekly window, and extra credit consumption — the exact numbers shown on the settings page.
+This returns `utilization` percentages and `resets_at` timestamps for the 5-hour session window, the 7-day weekly windows (all models, Sonnet only, Claude Design), daily routine runs, and extra-credit consumption — the exact numbers shown on the settings page.
 
-The API sits behind Cloudflare's bot protection, which blocks plain HTTP requests from Node.js. The Electron overlay solves this by making the request from inside a hidden Chromium window (Electron's `BrowserWindow`), which passes the Cloudflare checks transparently. The result is cached to `~/.claude-usage-cache.json` so the VS Code extension can read it without repeating the browser dance.
+Both tools authenticate by reading the **Claude Code OAuth bearer token** from `~/.claude/.credentials.json` (the token written when you log into the `claude` CLI) and sending it as `Authorization: Bearer …` with the `anthropic-beta: oauth-2025-04-20` header. The organization ID is discovered by enumerating `/api/organizations` and trying each org's usage endpoint until one returns data.
+
+This OAuth-direct path needs no browser and no cookies. If claude.ai ever rejects the token, the tools fall back to:
+
+- **Inference API headers** — a 1-token request to `api.anthropic.com/v1/messages` returns `anthropic-ratelimit-unified-5h-*` and `-7d-*` headers, giving session and weekly utilization (partial — no per-model breakdown).
+- **Electron BrowserWindow session** (overlay only) — a one-time login window establishes a claude.ai session cookie inside Electron's own browser context, used to call the same usage endpoint with full data. This is the fallback that replaced the old browser-cookie reader.
+
+The overlay caches whichever live result it gets to `~/.claude-usage-cache.json` so the VS Code extension can read it without repeating any work.
 
 ### Local JSONL fallback
 
@@ -252,42 +249,30 @@ Percentages are calculated against the plan limits you configure. Without config
 
 ## Privacy
 
-- No data is sent anywhere. All network requests go only to `claude.ai` using your own browser session.
-- Cookie access is read-only and local. The extension copies the browser's cookie database to a tempfile, reads it via in-process `sql.js`, then deletes the tempfile. Nothing is stored or transmitted.
-- The cache file `~/.claude-usage-cache.json` contains only usage percentages and token counts — no cookies, no personal data.
+- No data is sent anywhere except claude.ai and api.anthropic.com, using your own Claude Code OAuth token.
+- The token is read locally from `~/.claude/.credentials.json` (read-only) and never stored or transmitted anywhere other than as the `Authorization` header on requests to Anthropic's own servers.
+- The cache file `~/.claude-usage-cache.json` contains only usage percentages, token counts, and reset timestamps — no token, no cookies, no personal data.
 
 ---
 
 ## Troubleshooting
 
-**Numbers don't match claude.ai (showing 0% or wrong %)**
-
-The extension needs a browser session to read exact values. On each machine:
-1. Open claude.ai in any supported browser and make sure you're logged in.
-2. Visit `claude.ai/settings/usage` once so the cookies are written to disk.
-3. Click the status bar item (or run **Claude Usage: Refresh Now**) to force a refresh.
-
-Supported browsers (checked automatically): Firefox, Chrome, Chromium, Brave, Edge, Vivaldi, Opera (Linux only).
-
 **Tooltip says `(local estimate)` instead of `(live)`**
 
-The cookie read failed. Common causes:
-- Not logged in to claude.ai in any of the supported browsers above.
-- Using a non-default Chromium profile (only the `Default` profile is searched).
-- Using a fork the extension doesn't know about (e.g. LibreWolf, Arc on Windows).
-- **Linux Chrome with kwallet/gnome-keyring**: cookies are encrypted with a key the extension can't read. Either start Chrome with `--password-store=basic` and **log in to claude.ai again** (existing cookies won't decrypt — a fresh login is required), or use Firefox.
-- **macOS first run**: a Keychain dialog appears asking permission to read the browser's Safe Storage password. Click **Always Allow** to suppress future prompts.
-- **Chrome ≥127 v20 app-bound encryption**: the `sessionKey` cookie typically still uses v10/v11, so this is rare. If it ever breaks, fall back to Firefox (plaintext on every OS).
+The live API sources couldn't authenticate. The usual cause is a missing or expired Claude Code OAuth token. Fix it by making sure Claude Code is logged in:
+1. Run `claude` in a terminal and complete the login if prompted.
+2. Confirm `~/.claude/.credentials.json` exists and `claudeAiOauth.accessToken` is present and not expired.
+3. Click the status bar item (or run **Claude Usage: Refresh Now**) to force a refresh.
+
+**Tooltip shows session + weekly but no per-model rows**
+
+You're on the **inference-headers** source (claude.ai rejected the token but `api.anthropic.com` accepted it). This source only exposes 5-hour and 7-day utilization. To get the full per-model breakdown, run the Electron overlay, which can fall back to a one-time claude.ai login window.
 
 **Status bar shows `—` or raw token counts instead of percentages**
 
 The extension fell back to local JSONL and no plan limits are configured. Either:
-- Open claude.ai in your browser and log in (see above), or
-- Set `claudeUsage.sessionLimitTokens` in VS Code settings to match your plan.
-
-**Cloudflare authentication prompt**
-
-Open claude.ai in your browser on this machine, complete the human-check, then click the status bar item to refresh. The `cf_clearance` cookie has to be fresh.
+- Ensure Claude Code is logged in so the live API works (see above), or
+- Set `claudeUsage.sessionLimitTokens` (and the weekly limits) in VS Code settings to match your plan.
 
 ---
 
