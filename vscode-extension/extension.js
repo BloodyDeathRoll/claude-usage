@@ -525,7 +525,12 @@ function miniBar(pct) {
 
 function fmt(n) {
   if (n >= 1_000_000) return (n / 1_000_000).toFixed(2) + 'M';
-  if (n >= 1_000)     return (n / 1_000).toFixed(1) + 'k';
+  if (n >= 1_000) {
+    const k = n / 1_000;
+    // .toFixed(1) on >=999.95 rounds to "1000.0" — roll over to M instead.
+    if (k >= 999.95) return (n / 1_000_000).toFixed(2) + 'M';
+    return k.toFixed(1) + 'k';
+  }
   return String(n);
 }
 

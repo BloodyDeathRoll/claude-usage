@@ -66,8 +66,12 @@ def chrome_db():
     return None
 
 def read_sqlite(db, query):
-    tmp = tempfile.mktemp(suffix=".sqlite")
-    shutil.copy2(db, tmp)
+    # mkstemp creates the file atomically with mode 0600 (no predictable-name
+    # race); copyfile copies content only, so it does NOT reset perms back to the
+    # source DB's (copy2 would, re-exposing the sessionKey cookie copy).
+    fd, tmp = tempfile.mkstemp(suffix=".sqlite")
+    os.close(fd)
+    shutil.copyfile(db, tmp)
     try:
         conn = sqlite3.connect(tmp)
         rows = conn.execute(query).fetchall()
@@ -113,14 +117,21 @@ print(json.dumps(cookies))
 `;
 
 function readCookies() {
+  let dir = null;
   try {
-    const tmp = path.join(os.tmpdir(), 'claude_usage_cli_cookies.py');
-    fs.writeFileSync(tmp, PYTHON);
+    // Private per-run dir (mode 0700) + non-predictable filename, instead of a
+    // fixed os.tmpdir()/claude_usage_cli_cookies.py that another local user could
+    // pre-create or symlink before we write and execute it. Cleaned up below.
+    dir = fs.mkdtempSync(path.join(os.tmpdir(), 'claude-usage-'));
+    const tmp = path.join(dir, 'cookies.py');
+    fs.writeFileSync(tmp, PYTHON, { mode: 0o600 });
     const out = execSync(`python3 "${tmp}"`, { timeout: 6000, stdio: ['pipe','pipe','pipe'] });
     const data = JSON.parse(out.toString().trim());
     return data.sessionKey ? data : null;
   } catch {
     return null;
+  } finally {
+    if (dir) { try { fs.rmSync(dir, { recursive: true, force: true }); } catch {} }
   }
 }
 
@@ -245,6 +256,15 @@ function printShort(raw) {
   const cookies = readCookies();
   if (!cookies) {
     process.stderr.write('Error: no browser session found.\nOpen claude.ai in your browser (Firefox, Chrome, Brave, Edge, Vivaldi) and make sure you are logged in, then retry.\n');
+    process.exit(1);
+  }
+
+  // Without lastActiveOrg the request path becomes /api/organizations/undefined/usage,
+  // which 404s and is otherwise misreported below as a connectivity failure.
+  // (A fuller fix would probe /api/organizations and try each org, as the
+  // Electron app and VS Code extension do.)
+  if (!cookies.lastActiveOrg) {
+    process.stderr.write('Error: signed in, but no active claude.ai organization was found (missing lastActiveOrg cookie).\nOpen https://claude.ai, select your workspace so the cookie is set, then retry.\n');
     process.exit(1);
   }
 

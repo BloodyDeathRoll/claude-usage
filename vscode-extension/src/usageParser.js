@@ -143,7 +143,13 @@ async function getUsage(cfg) {
   const resetAt = sessionOldest ? new Date(sessionOldest.getTime() + SESSION_WINDOW_MS) : null;
 
   const sessionLimit = cfg?.sessionLimitTokens ?? null;
-  const sonnetLimit  = cfg?.weeklyModelLimits?.sonnet ?? cfg?.weeklyLimitTokens ?? null;
+  // "All models" weekly = total billable across every model family, measured
+  // against the all-model weekly limit. Falls back to summing the per-model
+  // limits when only weeklyModelLimits is configured.
+  const weeklyLimit  = cfg?.weeklyLimitTokens
+    ?? (cfg?.weeklyModelLimits
+          ? Object.values(cfg.weeklyModelLimits).reduce((a, b) => a + (b || 0), 0)
+          : null);
 
   return {
     source:    'local',
@@ -153,8 +159,8 @@ async function getUsage(cfg) {
       resetsAt: resetAt,
     },
     allModels: {
-      pct:    sonnetLimit ? Math.min(100, ((weekly.byModel.sonnet?.billable ?? weekly.billable) / sonnetLimit) * 100) : null,
-      tokens: weekly.byModel.sonnet?.billable ?? weekly.billable,
+      pct:    weeklyLimit ? Math.min(100, (weekly.billable / weeklyLimit) * 100) : null,
+      tokens: weekly.billable,
     },
     lastUpdated: new Date(),
   };

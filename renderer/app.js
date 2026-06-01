@@ -40,7 +40,12 @@ const elCustomSession  = $('custom-session');
 
 function fmt(n) {
   if (n >= 1_000_000) return (n / 1_000_000).toFixed(2) + 'M';
-  if (n >= 1_000)     return (n / 1_000).toFixed(1) + 'k';
+  if (n >= 1_000) {
+    const k = n / 1_000;
+    // .toFixed(1) on >=999.95 rounds to "1000.0" — roll over to M instead.
+    if (k >= 999.95) return (n / 1_000_000).toFixed(2) + 'M';
+    return k.toFixed(1) + 'k';
+  }
   return String(n);
 }
 
@@ -370,7 +375,11 @@ window.claudeUsage.onConfigUpdate(cfg => {
 });
 
 window.claudeUsage.getConfig().then(cfg => {
-  if (!cfg || cfg.plan == null) {
+  // A saved config always carries a `plan` key (including `plan: null` for the
+  // explicit "No limit" choice). Only fall back to Pro defaults when the config
+  // is genuinely absent / never initialised — otherwise we'd clobber a user who
+  // deliberately turned limits off.
+  if (!cfg || !('plan' in cfg)) {
     const proDefaults = {
       plan: 'pro',
       sessionLimitTokens: 320000,
