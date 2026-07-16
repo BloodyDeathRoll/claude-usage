@@ -141,16 +141,19 @@ async function stageElectron(target) {
     version: ELECTRON_VERSION, platform, arch, artifactName: 'electron',
   });
 
-  rmrf(ELECTRON);
-  fs.mkdirSync(ELECTRON, { recursive: true });
-  await extract(zip, { dir: ELECTRON });
+  // Runtimes live under electron/<target>/ so a universal VSIX can carry several
+  // side by side; extension.js resolves its own platform-arch at launch.
+  const dest = path.join(ELECTRON, target);
+  rmrf(dest);
+  fs.mkdirSync(dest, { recursive: true });
+  await extract(zip, { dir: dest });
 
-  const before = dirSize(ELECTRON);
+  const before = dirSize(dest);
 
   // Drop unused locale packs. On macOS they live inside the .app bundle.
   const localeDirs = [
-    path.join(ELECTRON, 'locales'),
-    path.join(ELECTRON, 'Electron.app', 'Contents', 'Frameworks',
+    path.join(dest, 'locales'),
+    path.join(dest, 'Electron.app', 'Contents', 'Frameworks',
       'Electron Framework.framework', 'Resources'),
   ];
   for (const dir of localeDirs) {
@@ -164,25 +167,24 @@ async function stageElectron(target) {
   // Do NOT delete resources/default_app.asar. It is not just Electron's welcome
   // screen — it implements `electron <app-dir>`, which is the only reason passing
   // the overlay path works. Without it the binary exits silently with no output.
-  const defaultApp = platform === 'darwin'
-    ? path.join(ELECTRON, 'Electron.app', 'Contents', 'Resources', 'default_app.asar')
-    : path.join(ELECTRON, 'resources', 'default_app.asar');
+  const defaultApp = path.join(dest, 'resources', 'default_app.asar');
   if (!fs.existsSync(defaultApp)) {
     throw new Error('default_app.asar missing — `electron <dir>` would not work');
   }
 
-  log(`  electron staged: ${mb(before)} → ${mb(dirSize(ELECTRON))}`);
+  log(`  electron staged: ${mb(before)} → ${mb(dirSize(dest))}`);
 }
 
 // ── Package ───────────────────────────────────────────────────────────────────
 
 function packageVsix(target) {
-  log(`▸ Packaging VSIX for ${target}`);
-  execFileSync('npx', ['--no-install', 'vsce', 'package', '--target', target], {
-    cwd: EXT_DIR, stdio: 'inherit',
-  });
+  log(target ? `▸ Packaging VSIX for ${target}` : '▸ Packaging universal VSIX (all runtimes)');
+  execFileSync('npx', ['--no-install', 'vsce', 'package',
+    ...(target ? ['--target', target] : [])], { cwd: EXT_DIR, stdio: 'inherit' });
   const version = require(path.join(EXT_DIR, 'package.json')).version;
-  const vsix = path.join(EXT_DIR, `tracker-claude-usage-${target}-${version}.vsix`);
+  const vsix = path.join(EXT_DIR,
+    target ? `tracker-claude-usage-${target}-${version}.vsix`
+           : `tracker-claude-usage-${version}.vsix`);
   if (!fs.existsSync(vsix)) throw new Error(`expected VSIX not produced: ${vsix}`);
   log(`  ✓ ${path.basename(vsix)} — ${mb(fs.statSync(vsix).size)}`);
   return vsix;
@@ -193,17 +195,14 @@ function packageVsix(target) {
 function verifyVsix(vsix, target) {
   const out = execFileSync('unzip', ['-Z1', vsix], { encoding: 'utf8' }).split('\n');
   const { platform } = TARGETS[target];
-  const bin = platform === 'win32' ? 'extension/electron/electron.exe'
-    : platform === 'darwin' ? 'extension/electron/Electron.app/Contents/MacOS/Electron'
-    : 'extension/electron/electron';
+  const bin = platform === 'win32' ? `extension/electron/${target}/electron.exe`
+    : `extension/electron/${target}/electron`;
   const required = [
     bin,
     'extension/overlay/main.js',
     'extension/overlay/renderer/index.html',
     'extension/overlay/node_modules/chokidar/package.json',
-    platform === 'darwin'
-      ? 'extension/electron/Electron.app/Contents/Resources/default_app.asar'
-      : 'extension/electron/resources/default_app.asar',
+    `extension/electron/${target}/resources/default_app.asar`,
   ];
   for (const f of required) {
     if (!out.includes(f)) throw new Error(`VSIX for ${target} is missing ${f}`);
@@ -236,11 +235,22 @@ async function main() {
   stageOverlay();
 
   const built = [];
-  for (const target of targets) {
-    await stageElectron(target);
-    const vsix = packageVsix(target);
-    verifyVsix(vsix, target);
+  if (argv.includes('--universal')) {
+    // One file carrying every runtime — for publishing through the Marketplace
+    // web UI, which accepts a single VSIX per version.
+    rmrf(ELECTRON);
+    for (const target of Object.keys(TARGETS)) await stageElectron(target);
+    const vsix = packageVsix(null);
+    for (const target of Object.keys(TARGETS)) verifyVsix(vsix, target);
     built.push(vsix);
+  } else {
+    for (const target of targets) {
+      rmrf(ELECTRON);
+      await stageElectron(target);
+      const vsix = packageVsix(target);
+      verifyVsix(vsix, target);
+      built.push(vsix);
+    }
   }
 
   // The staged runtime is a build artifact, not source.

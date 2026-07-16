@@ -161,21 +161,19 @@ function getOverlayDir() {
   return cfg || path.join(EXT_PATH, 'overlay');
 }
 
-// The Electron binary bundled for the platform this VSIX was built for.
+// The bundled Electron binary for this machine. Runtimes are staged under
+// electron/<platform>-<arch>/, so a platform-specific VSIX carries exactly one
+// and a universal VSIX carries several.
 function getElectronBin() {
-  const dir = path.join(EXT_PATH, 'electron');
-  switch (process.platform) {
-    case 'win32':  return path.join(dir, 'electron.exe');
-    case 'darwin': return path.join(dir, 'Electron.app', 'Contents', 'MacOS', 'Electron');
-    default:       return path.join(dir, 'electron');
-  }
+  const dir = path.join(EXT_PATH, 'electron', `${process.platform}-${process.arch}`);
+  return path.join(dir, process.platform === 'win32' ? 'electron.exe' : 'electron');
 }
 
 // A VSIX is a zip and the executable bit does not reliably survive extraction on
 // Unix. Restoring it is idempotent and cheap, so always do it before launching.
 function ensureExecutable() {
   if (process.platform === 'win32') return;
-  const dir = path.join(EXT_PATH, 'electron');
+  const dir = path.dirname(getElectronBin());
   const bins = [getElectronBin()];
   if (process.platform === 'linux') {
     bins.push(path.join(dir, 'chrome-sandbox'));
