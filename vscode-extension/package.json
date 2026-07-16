@@ -1,8 +1,8 @@
 {
   "name": "tracker-claude-usage",
   "displayName": "Tracker Claude Usage",
-  "description": "Real-time Claude Code session and weekly token usage in the status bar. Shows live data from overlay cache with local JSONL fallback.",
-  "version": "0.3.5",
+  "description": "Real-time Claude Code session and weekly token usage in the status bar, plus the floating overlay. Everything is bundled — nothing to install.",
+  "version": "0.4.0",
   "publisher": "EinHanamer",
   "license": "MIT",
   "repository": {
@@ -79,12 +79,18 @@
             "null"
           ],
           "default": null,
-          "description": "Absolute path to the claude-usage overlay directory (where main.js lives). Leave null to auto-detect from common locations (~/Projects/claude-usage, ~/Documents/Projects/claude-usage, ~/OneDrive/..., etc.)."
+          "description": "Absolute path to a claude-usage overlay directory (where main.js lives). Leave null to use the copy bundled with the extension."
         }
       }
     }
   },
   "devDependencies": {
-    "@vscode/vsce": "^3.0.0"
+    "@electron/get": "^3.1.0",
+    "@vscode/vsce": "^3.0.0",
+    "extract-zip": "^2.0.1"
+  },
+  "scripts": {
+    "build": "node scripts/build.js",
+    "build:all": "node scripts/build.js --all"
   }
 }

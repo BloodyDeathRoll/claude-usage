@@ -1,7 +1,12 @@
 .vscode/**
 .vscodeignore
 .claude/**
+scripts/**
+
+# The extension's own build/dev deps (vsce, @electron/get) must not ship...
 node_modules/**
+# ...but the overlay's runtime deps must. This negation must follow the rule above.
+!overlay/node_modules/**
 package-lock.json
 *.vsix
 claude-usage-*/

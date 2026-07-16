@@ -146,71 +146,59 @@ async function fetchWithOAuth() {
   });
 }
 
+// ── Bundled overlay ──────────────────────────────────────────────────────────
+// The overlay app and the Electron runtime that runs it both ship inside this
+// extension (staged by scripts/build.js), so there is nothing for the user to
+// clone, download or install after installing the extension.
+
+let EXT_PATH = null;   // set in activate()
+
+// The app directory to run. `claudeUsage.overlayPath` still wins when set, so a
+// user pointing at their own checkout keeps working; otherwise it is the copy
+// bundled in the VSIX.
 function getOverlayDir() {
   const cfg = vscode.workspace.getConfiguration('claudeUsage').get('overlayPath');
-  if (cfg) return cfg;
-  const home = os.homedir();
-  const searchRoots = [
-    path.join(home, 'Projects'),
-    path.join(home, 'Documents', 'Projects'),
-    path.join(home, 'OneDrive', 'Documents', 'Projects'),
-    path.join(home, 'OneDrive', 'Projects'),
-    path.join(home, 'Desktop'),
-  ];
-  for (const root of searchRoots) {
-    for (const candidate of ['claude-usage', 'usage']) {
-      const p = path.join(root, candidate);
-      if (fs.existsSync(path.join(p, 'main.js'))) return p;
-    }
-  }
-  return path.join(home, 'Projects', 'claude-usage');
+  return cfg || path.join(EXT_PATH, 'overlay');
 }
 
-function getElectronBin(overlayDir) {
-  if (process.platform === 'win32') {
-    // Use the actual binary directly — bypasses electron.cmd → cmd.exe → node
-    // chain which creates a visible terminal tab in VS Code on Windows.
-    const distExe = path.join(overlayDir, 'node_modules', 'electron', 'dist', 'electron.exe');
-    if (fs.existsSync(distExe)) return { bin: distExe, shell: false };
-    // Fallback: .cmd wrapper (creates terminal tab, but better than nothing)
-    const cmd = path.join(overlayDir, 'node_modules', '.bin', 'electron.cmd');
-    if (fs.existsSync(cmd)) return { bin: cmd, shell: true };
+// The Electron binary bundled for the platform this VSIX was built for.
+function getElectronBin() {
+  const dir = path.join(EXT_PATH, 'electron');
+  switch (process.platform) {
+    case 'win32':  return path.join(dir, 'electron.exe');
+    case 'darwin': return path.join(dir, 'Electron.app', 'Contents', 'MacOS', 'Electron');
+    default:       return path.join(dir, 'electron');
   }
-  const bin = path.join(overlayDir, 'node_modules', '.bin', 'electron');
-  return fs.existsSync(bin) ? { bin, shell: false } : null;
 }
 
-function runNpmInstall(overlayDir) {
-  return new Promise((resolve, reject) => {
-    const npmCmd = process.platform === 'win32' ? 'npm.cmd' : 'npm';
-    const proc = spawn(npmCmd, ['install'], {
-      cwd: overlayDir,
-      shell: process.platform === 'win32',
-      stdio: ['ignore', 'pipe', 'pipe'],
-    });
-    let output = '';
-    proc.stdout.on('data', d => { output += d.toString(); });
-    proc.stderr.on('data', d => { output += d.toString(); });
-    proc.on('error', err => reject(new Error(`${err.message}\n${output}`)));
-    proc.on('exit', code => {
-      if (code === 0) resolve();
-      else reject(new Error(output || `npm install exited with code ${code}`));
-    });
-  });
+// A VSIX is a zip and the executable bit does not reliably survive extraction on
+// Unix. Restoring it is idempotent and cheap, so always do it before launching.
+function ensureExecutable() {
+  if (process.platform === 'win32') return;
+  const dir = path.join(EXT_PATH, 'electron');
+  const bins = [getElectronBin()];
+  if (process.platform === 'linux') {
+    bins.push(path.join(dir, 'chrome-sandbox'));
+    bins.push(path.join(dir, 'chrome_crashpad_handler'));
+  }
+  for (const bin of bins) {
+    try { if (fs.existsSync(bin)) fs.chmodSync(bin, 0o755); } catch {}
+  }
 }
 
 function launchElectron(overlayDir, electronBin) {
   const childEnv = { ...process.env };
+  // The extension host itself runs with ELECTRON_RUN_AS_NODE=1; inheriting it
+  // would boot our Electron as a bare Node process with no window.
   delete childEnv.ELECTRON_RUN_AS_NODE;
   delete childEnv.ELECTRON_NO_ATTACH_CONSOLE;
   // stdio:'ignore' + detached + unref = fully detached background process.
   // Piping stdout/stderr would leave open handles that VS Code's terminal
   // integration can attach to, creating a spurious terminal tab on Windows.
-  const child = spawn(electronBin.bin, [overlayDir], {
+  const child = spawn(electronBin, [overlayDir], {
     detached: true,
     stdio: 'ignore',
     cwd: overlayDir,
-    shell: electronBin.shell,
     windowsHide: true,
     env: childEnv,
   });
@@ -221,54 +209,23 @@ function launchElectron(overlayDir, electronBin) {
 }
 
 async function openOverlay() {
-  const OVERLAY_DIR = getOverlayDir();
+  const overlayDir  = getOverlayDir();
+  const electronBin = getElectronBin();
 
-  if (!fs.existsSync(path.join(OVERLAY_DIR, 'main.js'))) {
-    vscode.window.showWarningMessage(
-      `Claude Usage: overlay repo not found. Clone https://github.com/BloodyDeathRoll/claude-usage to one of: ` +
-      `~/Projects/claude-usage, ~/Documents/Projects/claude-usage, ~/OneDrive/Documents/Projects/claude-usage`,
-      'Open GitHub'
-    ).then(choice => {
-      if (choice === 'Open GitHub') {
-        vscode.env.openExternal(vscode.Uri.parse('https://github.com/BloodyDeathRoll/claude-usage'));
-      }
-    });
+  if (!fs.existsSync(path.join(overlayDir, 'main.js'))) {
+    vscode.window.showErrorMessage(
+      `Claude Usage: overlay app not found at ${overlayDir}. Reinstall the extension.`);
+    return;
+  }
+  if (!fs.existsSync(electronBin)) {
+    vscode.window.showErrorMessage(
+      `Claude Usage: this build has no Electron runtime for ${process.platform}-${process.arch}. ` +
+      'Install from the Marketplace so the matching platform build is chosen.');
     return;
   }
 
-  let electronBin = getElectronBin(OVERLAY_DIR);
-
-  if (!electronBin) {
-    const installed = await vscode.window.withProgress({
-      location: vscode.ProgressLocation.Notification,
-      title: 'Claude Usage: Installing overlay dependencies…',
-      cancellable: false,
-    }, async () => {
-      try {
-        await runNpmInstall(OVERLAY_DIR);
-        return true;
-      } catch (err) {
-        vscode.window.showErrorMessage(
-          `Claude Usage: npm install failed. Make sure Python 3 is installed. Error: ${err.message.split('\n')[0]}`,
-          'Open python.org'
-        ).then(choice => {
-          if (choice === 'Open python.org') {
-            vscode.env.openExternal(vscode.Uri.parse('https://www.python.org/downloads/'));
-          }
-        });
-        return false;
-      }
-    });
-
-    if (!installed) return;
-    electronBin = getElectronBin(OVERLAY_DIR);
-    if (!electronBin) {
-      vscode.window.showErrorMessage('Claude Usage: npm install completed but electron binary not found.');
-      return;
-    }
-  }
-
-  launchElectron(OVERLAY_DIR, electronBin);
+  ensureExecutable();
+  launchElectron(overlayDir, electronBin);
 }
 
 const OVERLAY_CONFIG_PATH = path.join(os.homedir(), '.claude-overlay-config.json');
@@ -294,6 +251,8 @@ let lastSource = null;   // 'api' | 'local' | null
 // ── Activation ────────────────────────────────────────────────────────────────
 
 function activate(context) {
+  EXT_PATH = context.extensionPath;
+
   statusItem = vscode.window.createStatusBarItem(vscode.StatusBarAlignment.Right, 1000);
   statusItem.command = 'claudeUsage.openOverlay';
   statusItem.show();
@@ -309,38 +268,6 @@ function activate(context) {
   refresh(false);
   timer = setInterval(() => refresh(false), POLL_MS);
   startClaudeWatcher();
-  setupOverlayIfNeeded(); // fire-and-forget: installs npm deps on first run
-}
-
-async function setupOverlayIfNeeded() {
-  const overlayDir = getOverlayDir();
-  if (!fs.existsSync(path.join(overlayDir, 'main.js'))) return; // repo not cloned
-  if (getElectronBin(overlayDir)) return;                        // already installed
-
-  const installed = await vscode.window.withProgress({
-    location: vscode.ProgressLocation.Notification,
-    title: 'Claude Usage: Installing overlay dependencies…',
-    cancellable: false,
-  }, async () => {
-    try {
-      await runNpmInstall(overlayDir);
-      return true;
-    } catch (err) {
-      vscode.window.showErrorMessage(
-        `Claude Usage: npm install failed — is Python 3 installed? (${err.message.split('\n')[0]})`,
-        'Open python.org'
-      ).then(choice => {
-        if (choice === 'Open python.org') {
-          vscode.env.openExternal(vscode.Uri.parse('https://www.python.org/downloads/'));
-        }
-      });
-      return false;
-    }
-  });
-
-  if (installed) {
-    vscode.window.showInformationMessage('Claude Usage: overlay ready. Click the status bar to launch it.');
-  }
 }
 
 // Watch ~/.claude/projects/ for JSONL writes so we refresh the moment a

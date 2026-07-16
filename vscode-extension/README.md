@@ -19,7 +19,7 @@ The numbers match the **claude.ai → Settings → Usage** page exactly. The ext
 | VS Code 1.85+ | |
 | Claude Code, logged in | Provides the OAuth token at `~/.claude/.credentials.json` that powers the live API. If `claude` runs and is authenticated, the extension works. |
 
-**The extension is pure Node — no Python, no native modules, no bundled runtime dependencies.** Authentication is just a bearer token read from a local file. The optional Electron overlay (a separate app in the repo) may require Python 3 for its `npm install`; that's unrelated to the extension itself.
+**Nothing to install after the extension.** The detailed overlay and the Electron runtime that runs it are bundled inside the extension, so there is no repo to clone, no `npm install`, and no Python. Authentication is just a bearer token read from a local file.
 
 ---
 
@@ -45,7 +45,7 @@ The tooltip header shows which source is in use: `Claude Usage (live)` (sources 
 | `claudeUsage.sessionLimitTokens` | `null` | Session token limit for your plan. Pro=320000, Max5=1600000, Max20=6400000. |
 | `claudeUsage.weeklyLimitTokens` | `null` | Weekly token limit for your plan. |
 | `claudeUsage.weeklyModelLimits` | `null` | Per-model weekly limits, e.g. `{"sonnet": 436000, "haiku": 25000}`. |
-| `claudeUsage.overlayPath` | `null` | Absolute path to the claude-usage overlay directory (where `main.js` lives). Leave null to auto-detect from common locations (`~/Projects/claude-usage`, `~/Documents/Projects/claude-usage`, `~/OneDrive/...`, etc.). |
+| `claudeUsage.overlayPath` | `null` | Absolute path to a claude-usage overlay directory (where `main.js` lives). Leave null to use the copy bundled with the extension. |
 
 Leave `sessionLimitTokens` and `weeklyLimitTokens` `null` to show raw token counts instead of percentages in the fallback case.
 
@@ -56,7 +56,7 @@ Leave `sessionLimitTokens` and `weeklyLimitTokens` `null` to show raw token coun
 | Command | Description |
 |---|---|
 | **Claude Usage: Refresh Now** | Force an immediate refresh. |
-| **Claude Usage: Open Detailed Overlay** | Launch the optional Electron overlay (installed from the repo; auto-detected or set via `claudeUsage.overlayPath`). |
+| **Claude Usage: Open Detailed Overlay** | Launch the overlay bundled with the extension. |
 
 ---
 

@@ -2,3 +2,14 @@ node_modules/
 package-lock.json
 dist/
 out/
+
+# Build artifacts staged into the extension by vscode-extension/scripts/build.js
+vscode-extension/overlay/
+vscode-extension/electron/
+
+# Platform-specific VSIXes are ~95-102 MB (they bundle an Electron runtime).
+# They belong on GitHub Releases / the Marketplace, not in git — and win32-arm64
+# exceeds GitHub's 100 MB file limit outright.
+vscode-extension/tracker-claude-usage-win32-*.vsix
+vscode-extension/tracker-claude-usage-linux-*.vsix
+vscode-extension/tracker-claude-usage-darwin-*.vsix
