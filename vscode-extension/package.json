@@ -2,7 +2,7 @@
   "name": "tracker-claude-usage",
   "displayName": "Tracker Claude Usage",
   "description": "Real-time Claude Code session and weekly token usage in the status bar, plus the floating overlay. Everything is bundled — nothing to install.",
-  "version": "0.4.0",
+  "version": "0.4.1",
   "publisher": "EinHanamer",
   "license": "MIT",
   "repository": {

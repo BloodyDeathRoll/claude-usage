@@ -44,12 +44,21 @@ function httpsGetJson(hostname, urlPath, reqHeaders) {
 function parseClaudeAiUsage(data) {
   if (!data || !data.five_hour) return null;
   const slot = s => s ? { pct: s.utilization ?? 0, resetsAt: s.resets_at ?? null } : null;
+  // Per-model weekly caps (e.g. Fable) arrive only in the `limits` array as
+  // weekly_scoped entries — the legacy top-level seven_day_* fields are null.
+  const scopedSlot = name => {
+    const l = Array.isArray(data.limits)
+      ? data.limits.find(x => x?.kind === 'weekly_scoped' && x?.scope?.model?.display_name === name)
+      : null;
+    return l ? { pct: l.percent ?? 0, resetsAt: l.resets_at ?? null } : null;
+  };
   return {
     source:           'api',
     session:          slot(data.five_hour),
     allModels:        slot(data.seven_day),
     sonnetOnly:       slot(data.seven_day_sonnet),
     claudeDesign:     slot(data.seven_day_cowork) ?? slot(data.seven_day_omelette),
+    fable:            scopedSlot('Fable'),
     dailyRoutineRuns: data.iguana_necktie ?? null,
     extraUsage: data.extra_usage ? {
       enabled:      data.extra_usage.is_enabled,
@@ -104,6 +113,7 @@ function parseRateLimitHeaders(headers) {
     allModels:        slot(sevenDUtil, sevenDReset),
     sonnetOnly:       null,
     claudeDesign:     null,
+    fable:            null,
     dailyRoutineRuns: null,
     extraUsage: overageSt != null ? {
       enabled: overageSt === 'allowed',
@@ -406,11 +416,12 @@ function buildTooltip(data) {
 
   md.appendMarkdown(usageRow('**Current session**', data.session));
 
-  if (data.allModels || data.sonnetOnly || data.claudeDesign) {
+  if (data.allModels || data.sonnetOnly || data.claudeDesign || data.fable) {
     md.appendMarkdown('**Weekly limits**\n\n');
     md.appendMarkdown(usageRow('↳ All models', data.allModels));
     md.appendMarkdown(usageRow('↳ Sonnet only', data.sonnetOnly));
     md.appendMarkdown(usageRow('↳ Claude Design', data.claudeDesign));
+    md.appendMarkdown(usageRow('↳ Fable', data.fable));
   }
 
   // Daily routine runs: limit is plan-tier hardcoded (Pro=5, Max5=15, Max20=60),

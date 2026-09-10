@@ -23,6 +23,9 @@ const elSonnetBar      = $('weekly-sonnet-bar');
 const elRowDesign      = $('row-design');
 const elDesignValue    = $('weekly-design-value');
 const elDesignBar      = $('weekly-design-bar');
+const elRowFable       = $('row-fable');
+const elFableValue     = $('weekly-fable-value');
+const elFableBar       = $('weekly-fable-bar');
 const elWeeklyReset    = $('weekly-reset');
 const elSectionFeatures = $('section-features');
 const elRoutinesValue  = $('routines-value');
@@ -148,6 +151,14 @@ function applyApiUsage(data) {
     elRowDesign.style.display = 'none';
   }
 
+  // ── Weekly — Fable ────────────────────────────────────────────────────────
+  if (data.fable) {
+    elRowFable.style.display = '';
+    applySlot(elFableValue, elFableBar, data.fable);
+  } else {
+    elRowFable.style.display = 'none';
+  }
+
   // ── Weekly reset date ─────────────────────────────────────────────────────
   const weeklyResets = data.allModels?.resetsAt ?? data.sonnetOnly?.resetsAt;
   if (weeklyResets) {
@@ -242,6 +253,7 @@ function applyLocalUsage(data) {
   // Hide API-only sections
   elRowSonnet.style.display      = 'none';
   elRowDesign.style.display      = 'none';
+  elRowFable.style.display       = 'none';
   elWeeklyReset.classList.remove('visible');
   elSectionFeatures.style.display = 'none';
   elSectionExtra.style.display   = 'none';

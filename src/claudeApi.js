@@ -97,12 +97,21 @@ function parseFetchResult(data) {
   if (!data || !data.five_hour) return null;
   // claude.ai returns utilization as 0–100 percentages
   const slot = s => s ? { pct: s.utilization ?? 0, resetsAt: s.resets_at ?? null } : null;
+  // Per-model weekly caps (e.g. Fable) arrive only in the `limits` array as
+  // weekly_scoped entries — the legacy top-level seven_day_* fields are null.
+  const scopedSlot = name => {
+    const l = Array.isArray(data.limits)
+      ? data.limits.find(x => x?.kind === 'weekly_scoped' && x?.scope?.model?.display_name === name)
+      : null;
+    return l ? { pct: l.percent ?? 0, resetsAt: l.resets_at ?? null } : null;
+  };
   return {
     source:           'api',
     session:          slot(data.five_hour),
     allModels:        slot(data.seven_day),
     sonnetOnly:       slot(data.seven_day_sonnet),
     claudeDesign:     slot(data.seven_day_cowork) ?? slot(data.seven_day_omelette),
+    fable:            scopedSlot('Fable'),
     dailyRoutineRuns: data.iguana_necktie ?? null,
     extraUsage: data.extra_usage ? {
       enabled:      data.extra_usage.is_enabled,
@@ -244,6 +253,7 @@ function parseRateLimitHeaders(headers) {
     allModels:    slot(sevenDUtil, sevenDReset),
     sonnetOnly:   null,
     claudeDesign: null,
+    fable:        null,
     extraUsage: overageSt != null ? {
       enabled:      overageSt === 'allowed',
       usedCredits:  null,
