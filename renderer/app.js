@@ -123,6 +123,10 @@ function applyApiUsage(data) {
   elBody.style.display   = 'flex';
   elFooter.style.display = 'flex';
 
+  // Undo anything the local fallback path left behind
+  elWeeklyRows.innerHTML       = '';
+  elSectionExtra.style.display = '';
+
   // ── Current session ──────────────────────────────────────────────────────
   const sPct = data.session?.pct ?? 0;
   elSessionValue.textContent = fmtPct(sPct);
